@@ -1,0 +1,23 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+*.tsbuildinfo
+
+# local data + caches (match store, static data cache)
+/.data/
+
+# env files hold secrets — never commit them
+.env
+.env*.local
+
+# installer state (v3.sh)
+.metaforge-settings
+
+# misc
+.DS_Store
+npm-debug.log*
+.vercel

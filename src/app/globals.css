@@ -1,0 +1,208 @@
+@import 'tailwindcss';
+
+@theme static {
+  --font-sans: 'Onest Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fraunces Variable', ui-serif, Georgia, serif;
+
+  /*
+   * Forge palette: warm ink and parchment taken from the MetaForge anvil and
+   * the Piltover skyline, one brass accent, sage and terracotta for good and bad.
+   */
+  --color-night: #0f0d0b;
+  --color-canopy: #161411;
+  --color-grove: #1c1916;
+  --color-bark: #25211d;
+  --color-moss: #3a342d;
+  --color-moon: #f1e9d8;
+  --color-lichen: #b8ab94;
+  --color-fog: #857a68;
+  --color-wisp: #e2b86a;
+  --color-wisp-deep: #b2781e;
+  --color-firefly: #e8c35e;
+  --color-ember: #d6805a;
+  --color-bloom: #e06e5c;
+  --color-fern: #b7c26c;
+  --color-good: #93c98a;
+  --color-dusk: #95a3c9;
+  --color-line: rgb(241 233 216 / 0.09);
+  --color-line-strong: rgb(241 233 216 / 0.17);
+
+  /* Game conventions */
+  --color-cost-1: #a3a9af;
+  --color-cost-2: #4fb07c;
+  --color-cost-3: #4f93d8;
+  --color-cost-4: #b16ad6;
+  --color-cost-5: #deb04e;
+  --color-cost-6: #e67fa9;
+  --color-tier-s: #e0704f;
+  --color-tier-a: #deaa4f;
+  --color-tier-b: #b3c064;
+  --color-tier-c: #6fa6c4;
+  --color-tier-d: #9a90c4;
+  --color-style-bronze: #c1905f;
+  --color-style-silver: #b9c5cf;
+  --color-style-gold: #e9c15e;
+  --color-style-unique: #e68552;
+  --color-style-prismatic: #dcc0f5;
+
+  --animate-rise: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-pulse-soft: pulse-soft 2.4s ease-in-out infinite;
+  --animate-slide: slide 1.1s ease-in-out infinite;
+  --animate-marquee: marquee 80s linear infinite;
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes marquee {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      transform: translate3d(-50%, 0, 0);
+    }
+  }
+  @keyframes slide {
+    from {
+      transform: translateX(-110%);
+    }
+    to {
+      transform: translateX(330%);
+    }
+  }
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background-color: var(--color-night);
+    color: var(--color-moon);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  ::selection {
+    background: rgb(226 184 106 / 0.3);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-wisp);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+  h1,
+  h2 {
+    font-family: var(--font-display);
+    font-weight: 560;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+  h3 {
+    text-wrap: balance;
+  }
+  img {
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+}
+
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility hex {
+  clip-path: polygon(25% 3%, 75% 3%, 100% 50%, 75% 97%, 25% 97%, 0% 50%);
+}
+
+@utility hex-tall {
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+
+@utility scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-moss) transparent;
+}
+
+/* Flat panel: solid ink with a hairline edge. */
+@utility surface {
+  background-color: var(--color-canopy);
+  border: 1px solid var(--color-line);
+}
+
+@utility surface-raised {
+  background-color: var(--color-grove);
+  border: 1px solid var(--color-line-strong);
+}
+
+@utility hairline {
+  border-color: var(--color-line);
+}
+
+@utility text-balance {
+  text-wrap: balance;
+}
+
+/* Small uppercase label above titles and table heads. */
+@utility eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* Kept for older markup: a quiet line grid instead of the old glowing hexes. */
+@utility hex-grid {
+  background-image:
+    linear-gradient(to right, rgb(241 233 216 / 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(241 233 216 / 0.035) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+/* Brand accent text (solid brass, no gradient). */
+@utility text-solar {
+  color: var(--color-wisp);
+}
+
+/* Film grain for the backdrop, so flat ink does not look plastic. */
+@utility grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track {
+    animation: none !important;
+  }
+  .marquee-viewport {
+    overflow-x: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
