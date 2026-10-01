@@ -1,13 +1,12 @@
 import { SET_RULES } from '@/config/game';
 import { autoPlace, computeTraits } from '@/lib/builder';
-import { indexStatic } from '@/lib/static-index';
-import type { Dataset } from './dataset';
-import { NO_PATCH } from './dataset';
+import { indexStatic } from '@/lib/static';
+import { NO_PATCH, type Dataset } from './dataset';
 import { ALL, type CompRow, type CompUnit, type Filter, type Scope, type StatRow, type Summary } from './types';
 
 /** Scoping, filtering and aggregation over the column dataset. Pure and synchronous. */
 
-export interface ScopeIdx {
+interface ScopeIdx {
   region: number; // -1 = all regions, -2 = region without data
   patch: number; // -1 = all patches
 }
@@ -266,6 +265,17 @@ export function aggregate(ds: Dataset, boards: Int32Array, baselineAvg: number) 
   };
 }
 
+/** Every champion at every star level it finished at, as rows keyed "champion:star". */
+export function unitForms(ds: Dataset, boards: Int32Array, baselineAvg: number): StatRow[] {
+  const forms = new Acc(ds.champKeys.length * 4);
+  for (let k = 0; k < boards.length; k++) {
+    const b = boards[k];
+    const p = ds.place[b];
+    for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) forms.hit(ds.uChamp[u] * 4 + Math.min(3, ds.uStar[u]), b, p);
+  }
+  return forms.rows((i) => `${ds.champKeys[Math.floor(i / 4)]}:${i % 4}`, boards.length, baselineAvg);
+}
+
 /** 1 for items that belong to a build (completed, emblems, artifacts, radiant, support), else 0. */
 function buildItems(ds: Dataset): Uint8Array {
   const index = indexStatic(ds.static);
@@ -454,7 +464,7 @@ export function clusterIndex(ds: Dataset, id: string): number {
   return ds.clusters.findIndex((c) => c.id === id);
 }
 
-export interface BuildRow {
+interface BuildRow {
   items: string[];
   n: number;
   avg: number;
@@ -486,6 +496,27 @@ export function heldItems(ds: Dataset, boards: Int32Array, champKey: string, bas
   return acc
     .rows((i) => ds.itemKeys[i], boards.length, baselineAvg)
     .map((r) => ({ ...r, copies: copies[ds.itemIdx.get(r.id)!] / r.n }));
+}
+
+/**
+ * The other way round: champions holding one item on the given boards, each counted once per
+ * board, against the average of those boards ("who should hold Infinity Edge" inside any filter).
+ */
+export function itemHolders(ds: Dataset, boards: Int32Array, itemKey: string, baselineAvg: number): StatRow[] {
+  const it = ds.itemIdx.get(itemKey);
+  if (it === undefined) return [];
+  const acc = new Acc(ds.champKeys.length);
+  for (let k = 0; k < boards.length; k++) {
+    const b = boards[k];
+    for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) {
+      for (let i = ds.iStart[u]; i < ds.iStart[u + 1]; i++) {
+        if (ds.iItem[i] !== it) continue;
+        acc.hit(ds.uChamp[u], b, ds.place[b]);
+        break;
+      }
+    }
+  }
+  return acc.rows((i) => ds.champKeys[i], boards.length, baselineAvg);
 }
 
 /** Deep dive for one champion: star levels, item counts, best items and full builds. */

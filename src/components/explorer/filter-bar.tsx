@@ -1,37 +1,17 @@
 'use client';
 
-import { Popover } from 'radix-ui';
-import { useMemo, useState, type ReactNode } from 'react';
-import { Ban, Check, Plus, Search, X } from 'lucide-react';
-import { useStatic } from '@/components/providers';
+import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Ban, Check, Plus, Search, X } from '@/components/icons';
 import { AugmentIcon, ChampionIcon, ItemIcon, TraitBadge, TraitHex } from '@/components/game/entities';
 import { GameImage } from '@/components/game/game-image';
+import { Popover } from '@/components/ui-client';
+import { costColor, currentIndex, styleFor, type StaticIndex } from '@/lib/static';
+import { ITEM_CATEGORY_LABEL, type ItemCategory, type ItemLite } from '@/lib/static/types';
 import { filterKey } from '@/lib/stats/filters';
 import type { Filter } from '@/lib/stats/types';
-import { costColor, type StaticIndex } from '@/lib/static-index';
-import { styleFor } from '@/lib/trait-style';
 import { cn } from '@/lib/utils';
-import { ITEM_CATEGORY_LABEL, type Item, type ItemCategory } from '@/types/static';
 
 const EQUIPMENT: ItemCategory[] = ['completed', 'emblem', 'artifact', 'radiant', 'support', 'component'];
-
-function PopoverBody({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <Popover.Portal>
-      <Popover.Content
-        sideOffset={8}
-        align="start"
-        collisionPadding={12}
-        className={cn(
-          'z-50 w-[min(420px,calc(100vw-24px))] rounded-xl border border-line-strong bg-canopy p-4 text-sm shadow-[0_30px_80px_-24px_rgb(0_0_0/0.9)] data-[state=open]:animate-rise',
-          className,
-        )}
-      >
-        {children}
-      </Popover.Content>
-    </Popover.Portal>
-  );
-}
 
 /* ── Describing a filter ────────────────────────────────── */
 export function describeFilter(f: Filter, index: StaticIndex): { icon: ReactNode; name: string; detail: string } {
@@ -138,7 +118,7 @@ function ExcludeToggle({ filter, onChange }: { filter: Filter; onChange: (f: Fil
 }
 
 function ItemGrid({ onPick, selected = [] }: { onPick: (id: string) => void; selected?: string[] }) {
-  const index = useStatic();
+  const index = currentIndex();
   const [q, setQ] = useState('');
   const groups = useMemo(() => {
     const list = index.data.items.filter(
@@ -154,9 +134,9 @@ function ItemGrid({ onPick, selected = [] }: { onPick: (id: string) => void; sel
           <div key={g.cat}>
             <div className="mb-1.5 text-[11px] text-fog">{ITEM_CATEGORY_LABEL[g.cat]}</div>
             <div className="flex flex-wrap gap-1">
-              {g.items.map((i: Item) => (
+              {g.items.map((i: ItemLite) => (
                 <button
-                  key={i.id}
+                  key={i.key}
                   type="button"
                   title={i.name}
                   onClick={() => onPick(i.key)}
@@ -188,7 +168,7 @@ function SearchInput({
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
-  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
   autoFocus?: boolean;
   large?: boolean;
 }) {
@@ -228,20 +208,13 @@ interface Hit {
 
 const KIND_LABEL: Record<HitKind, string> = { unit: 'Champions', item: 'Items', trait: 'Traits', aug: 'Augments' };
 
-/** 0 = name starts with the query, 1 = a word or the initials do ("ie" finds Infinity Edge), 2 = contains it. */
+/** How well a name matches: 0 starts with it, 1 a word or the initials do ("ie" finds Infinity Edge), 2 contains it. */
 function matchScore(name: string, needle: string): number | null {
   const n = name.toLowerCase();
   if (n.startsWith(needle)) return 0;
   const words = n.split(/[^a-z0-9]+/).filter(Boolean);
   if (words.some((w) => w.startsWith(needle))) return 1;
-  if (
-    needle.length >= 2 &&
-    words
-      .map((w) => w[0])
-      .join('')
-      .startsWith(needle)
-  )
-    return 1;
+  if (needle.length >= 2 && words.map((w) => w[0]).join('').startsWith(needle)) return 1;
   const flat = n.replace(/[^a-z0-9]/g, '');
   if (flat.includes(needle.replace(/[^a-z0-9]/g, '')) && needle.length >= 2) return 2;
   return null;
@@ -282,18 +255,18 @@ function HitIcon({ hit }: { hit: Hit }) {
 
 /* ── Editors ────────────────────────────────────────────── */
 function UnitEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'unit' }>; onChange: (f: Filter) => void }) {
-  const index = useStatic();
+  const index = currentIndex();
   const [picking, setPicking] = useState(false);
   const stars = filter.stars ?? [];
   const items = filter.items ?? [];
   const toggleStar = (s: number) => {
     const next = stars.includes(s) ? stars.filter((x) => x !== s) : [...stars, s].sort();
-    onChange({ ...filter, stars: next.length && next.length < 3 ? next : undefined });
+    onChange({ ...filter, stars: next.length && next.length < 4 ? next : undefined });
   };
   return (
     <div className="space-y-4">
       <Row label="Star level">
-        {[1, 2, 3].map((s) => (
+        {[1, 2, 3, 4].map((s) => (
           <Toggle key={s} on={stars.includes(s)} onClick={() => toggleStar(s)}>
             {'★'.repeat(s)}
           </Toggle>
@@ -322,8 +295,8 @@ function UnitEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'unit' 
             type="button"
             onClick={() => setPicking((p) => !p)}
             className={cn(
-              'grid size-9 place-items-center rounded-md border border-dashed text-lichen hover:border-wisp/50 hover:text-wisp',
-              picking ? 'border-wisp/50 text-wisp' : 'border-line-strong',
+              'grid size-9 place-items-center rounded-md border border-dashed hover:border-wisp/50 hover:text-wisp',
+              picking ? 'border-wisp/50 text-wisp' : 'border-line-strong text-lichen',
             )}
             aria-label="Add item"
           >
@@ -356,7 +329,7 @@ function UnitEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'unit' 
 }
 
 function TraitEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'trait' }>; onChange: (f: Filter) => void }) {
-  const index = useStatic();
+  const index = currentIndex();
   const trait = index.trait(filter.id);
   const exact = Boolean(filter.min && filter.max && filter.min === filter.max);
   return (
@@ -459,10 +432,11 @@ function FilterChip({
   onChange: (f: Filter) => void;
   onRemove: () => void;
 }) {
-  const index = useStatic();
+  const index = currentIndex();
   const d = describeFilter(filter, index);
+  const anchor = useRef<HTMLButtonElement>(null);
   return (
-    <Popover.Root open={open} onOpenChange={onOpenChange}>
+    <>
       <span
         className={cn(
           'inline-flex h-10 items-center rounded-xl border pl-1.5 pr-1 transition-colors',
@@ -470,14 +444,19 @@ function FilterChip({
           open && 'ring-2 ring-wisp/30',
         )}
       >
-        <Popover.Trigger asChild>
-          <button type="button" className="flex h-full items-center gap-2 pl-1 pr-2 text-[13px]">
-            {filter.not && <span className="rounded bg-bloom/20 px-1.5 py-0.5 text-[10px] font-bold text-bloom">NOT</span>}
-            {d.icon}
-            <span className="font-medium text-moon">{d.name}</span>
-            {d.detail && <span className="text-lichen">{d.detail}</span>}
-          </button>
-        </Popover.Trigger>
+        <button
+          ref={anchor}
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => onOpenChange(!open)}
+          className="flex h-full items-center gap-2 pl-1 pr-2 text-[13px]"
+        >
+          {filter.not && <span className="rounded bg-bloom/20 px-1.5 py-0.5 text-[10px] font-bold text-bloom">NOT</span>}
+          {d.icon}
+          <span className="font-medium text-moon">{d.name}</span>
+          {d.detail && <span className="text-lichen">{d.detail}</span>}
+        </button>
         <button
           type="button"
           onClick={onRemove}
@@ -487,14 +466,14 @@ function FilterChip({
           <X className="size-3.5" />
         </button>
       </span>
-      <PopoverBody>
+      <Popover open={open} onOpenChange={onOpenChange} anchor={anchor}>
         <div className="mb-4 flex items-center gap-3">
           {d.icon}
           <div className="text-[15px] font-semibold">{d.name}</div>
         </div>
         <Editor filter={filter} onChange={onChange} />
-      </PopoverBody>
-    </Popover.Root>
+      </Popover>
+    </>
   );
 }
 
@@ -502,8 +481,9 @@ function FilterChip({
 type PickTab = 'units' | 'traits' | 'items' | 'augments' | 'level';
 
 function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void; hasAugments: boolean; active: Set<string> }) {
-  const index = useStatic();
+  const index = currentIndex();
   const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
   const [tab, setTab] = useState<PickTab>('units');
   const [q, setQ] = useState('');
   const needle = q.trim().toLowerCase();
@@ -530,7 +510,7 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
   const hits = useMemo(() => (needle ? searchAll(index, needle, hasAugments) : []), [index, needle, hasAugments]);
   const [cursor, setCursor] = useState(0);
   const pick = (hit: Hit) => add({ k: hit.kind, id: hit.key } as Filter);
-  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (!hits.length) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -545,17 +525,19 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
   };
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <button
-          type="button"
-          className="inline-flex h-10 items-center gap-2 rounded-xl border border-dashed border-lichen/30 px-3.5 text-[13px] font-medium text-lichen transition hover:border-wisp/60 hover:text-wisp"
-        >
-          <Plus className="size-4" aria-hidden />
-          Add filter
-        </button>
-      </Popover.Trigger>
-      <PopoverBody className="w-[min(520px,calc(100vw-24px))]">
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="inline-flex h-9 items-center gap-2 rounded-lg border border-dashed border-lichen/30 px-3.5 text-[13px] font-medium text-lichen transition hover:border-wisp/60 hover:text-wisp"
+      >
+        <Plus className="size-4" aria-hidden />
+        Add filter
+      </button>
+      <Popover open={open} onOpenChange={setOpen} anchor={anchor} wide>
         <SearchInput
           value={q}
           onChange={(v) => {
@@ -629,7 +611,7 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
                       <div className="grid grid-cols-6 gap-1 sm:grid-cols-8">
                         {list.map((c) => (
                           <button
-                            key={c.id}
+                            key={c.key}
                             type="button"
                             title={c.name}
                             onClick={() => add({ k: 'unit', id: c.key })}
@@ -648,7 +630,7 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
                 <div className="grid grid-cols-2 gap-1">
                   {traits.map((t) => (
                     <button
-                      key={t.id}
+                      key={t.key}
                       type="button"
                       onClick={() => add({ k: 'trait', id: t.key })}
                       className="relative flex items-center gap-2 rounded-lg p-2 text-left text-[13px] hover:bg-white/5"
@@ -670,7 +652,7 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
                       <div className="flex flex-wrap gap-1">
                         {list.map((i) => (
                           <button
-                            key={i.id}
+                            key={i.key}
                             type="button"
                             title={i.name}
                             onClick={() => add({ k: 'item', id: i.key })}
@@ -688,7 +670,7 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
                 <div className="grid grid-cols-2 gap-1">
                   {augments.map((a) => (
                     <button
-                      key={a.id}
+                      key={a.key}
                       type="button"
                       onClick={() => add({ k: 'aug', id: a.key })}
                       className="flex items-center gap-2 rounded-lg p-2 text-left text-[13px] hover:bg-white/5"
@@ -724,8 +706,8 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
             </div>
           </>
         )}
-      </PopoverBody>
-    </Popover.Root>
+      </Popover>
+    </>
   );
 }
 
@@ -738,6 +720,7 @@ export function FilterBar({
   onRemove,
   onClear,
   hasAugments,
+  trailing,
 }: {
   filters: Filter[];
   editing: string | null;
@@ -747,6 +730,7 @@ export function FilterBar({
   onRemove: (key: string) => void;
   onClear: () => void;
   hasAugments: boolean;
+  trailing?: ReactNode;
 }) {
   const active = new Set(filters.map(filterKey));
   return (
@@ -778,6 +762,7 @@ export function FilterBar({
           Clear all
         </button>
       )}
+      {trailing && <div className="flex flex-wrap items-center gap-2 sm:ml-auto">{trailing}</div>}
     </div>
   );
 }

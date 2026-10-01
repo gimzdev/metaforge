@@ -6,7 +6,8 @@ import type { Filter } from './types';
 const MAX_FILTERS = 16;
 const KEY_RE = /^[a-z0-9_.:{}-]{1,96}$/;
 
-function key(value: unknown): string | null {
+/** A champion, item, trait or augment key as filters take it (lowercase api name), or null. */
+export function cleanKey(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const k = value.trim().toLowerCase();
   return KEY_RE.test(k) ? k : null;
@@ -17,19 +18,19 @@ function intIn(value: unknown, min: number, max: number): number | undefined {
   return Number.isInteger(n) && n >= min && n <= max ? n : undefined;
 }
 
-export function sanitizeFilter(raw: unknown): Filter | null {
+function sanitizeFilter(raw: unknown): Filter | null {
   if (!raw || typeof raw !== 'object') return null;
   const f = raw as Record<string, unknown>;
   const not = f.not === true ? true : undefined;
   switch (f.k) {
     case 'unit': {
-      const id = key(f.id);
+      const id = cleanKey(f.id);
       if (!id) return null;
       const stars = Array.isArray(f.stars)
         ? [...new Set(f.stars.map((s) => intIn(s, 1, 4)).filter((s): s is number => s !== undefined))].sort()
         : [];
       const items = Array.isArray(f.items)
-        ? f.items.map(key).filter((i): i is string => Boolean(i)).slice(0, 3)
+        ? f.items.map(cleanKey).filter((i): i is string => Boolean(i)).slice(0, 3)
         : [];
       const minItems = intIn(f.minItems, 1, 3);
       return {
@@ -42,13 +43,13 @@ export function sanitizeFilter(raw: unknown): Filter | null {
       };
     }
     case 'item': {
-      const id = key(f.id);
+      const id = cleanKey(f.id);
       if (!id) return null;
       const min = intIn(f.min, 2, 9);
       return { k: 'item', id, ...(min ? { min } : {}), ...(not ? { not } : {}) };
     }
     case 'trait': {
-      const id = key(f.id);
+      const id = cleanKey(f.id);
       if (!id) return null;
       const min = intIn(f.min, 1, 10);
       let max = intIn(f.max, 1, 10);
@@ -56,7 +57,7 @@ export function sanitizeFilter(raw: unknown): Filter | null {
       return { k: 'trait', id, ...(min ? { min } : {}), ...(max ? { max } : {}), ...(not ? { not } : {}) };
     }
     case 'aug': {
-      const id = key(f.id);
+      const id = cleanKey(f.id);
       return id ? { k: 'aug', id, ...(not ? { not } : {}) } : null;
     }
     case 'level': {
@@ -103,3 +104,7 @@ export function filterSignature(filters: Filter[]): string {
 export function filterKey(f: Filter): string {
   return f.k === 'level' ? 'level' : `${f.k}:${f.id}`;
 }
+
+/** Explorer tabs, shared by the server page and the client app. */
+export type ExplorerTab = 'units' | 'items' | 'traits' | 'comps' | 'levels' | 'augments';
+export const EXPLORER_TABS: ExplorerTab[] = ['units', 'items', 'traits', 'comps', 'levels', 'augments'];

@@ -4,6 +4,5 @@ import { getStatus } from '@/lib/status';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const status = await getStatus();
-  return NextResponse.json(status, { headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json(await getStatus(), { headers: { 'Cache-Control': 'no-store' } });
 }

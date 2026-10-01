@@ -1,4 +1,4 @@
-import type { CompRow, StatRow, Tier, TieredComp, TieredRow } from './types';
+import type { CompRow, StatRow, Tier, TieredComp, TieredRow, TopUnit } from './types';
 
 /**
  * Letter grades from a Bayesian-shrunk average placement: small samples are
@@ -8,7 +8,7 @@ import type { CompRow, StatRow, Tier, TieredComp, TieredRow } from './types';
 const PRIOR = 4.5;
 const PRIOR_WEIGHT = 25;
 
-export function shrunkAvg(avg: number, n: number) {
+function shrunkAvg(avg: number, n: number) {
   return (avg * n + PRIOR * PRIOR_WEIGHT) / (n + PRIOR_WEIGHT);
 }
 
@@ -17,7 +17,7 @@ export function minSample(totalBoards: number, share = 0.004, floor = 10) {
 }
 
 /** Relative grades: the best ~12% are S, then A 23%, B 30%, C 20%, D rest. */
-export function gradeRows(rows: StatRow[], minN: number): TieredRow[] {
+export function gradeRows<R extends Pick<StatRow, 'n' | 'avg'> = StatRow>(rows: R[], minN: number): Array<R & Pick<TieredRow, 'score' | 'grade'>> {
   const scored = rows.map((r) => ({ ...r, score: shrunkAvg(r.avg, r.n), grade: null as Tier | null }));
   const eligible = scored.filter((r) => r.n >= minN).sort((a, b) => a.score - b.score);
   const cuts: Array<[Tier, number]> = [
@@ -74,3 +74,65 @@ export function highlights(rows: StatRow[], minN: number): Highlight[] {
   if (sleeper && sleeper.id !== best.id) out.push({ kind: 'sleeper', id: sleeper.id, row: sleeper });
   return out;
 }
+
+/**
+ * Standout units across every cost. Raw average placement favours legendaries, which mostly show
+ * up on late boards that were already winning, so each champion is judged at each star level
+ * against the other champions of the same cost at that star level: a 3-star 1-cost against other
+ * 3-star 1-costs, a 2-star 4-cost against other 2-star 4-costs, a legendary against legendaries.
+ * Only the forms players build toward count: cheap units at 3 stars (reroll), 3 and 4-costs at
+ * 2 stars or more, legendaries at any star level. The ones that beat their peers the most, and
+ * also place well outright, make the list; each champion appears once, at its strongest form.
+ */
+export function topUnits(
+  forms: StatRow[],
+  champion: (key: string) => { cost: number; family: string } | null,
+  minN: number,
+  count = 6,
+): TopUnit[] {
+  const parsed = forms.flatMap((r) => {
+    const cut = r.id.lastIndexOf(':');
+    const key = r.id.slice(0, cut);
+    const c = champion(key);
+    const star = Number(r.id.slice(cut + 1));
+    return c && c.cost > 0 && star >= (TARGET_STAR[c.cost] ?? 1) ? [{ ...r, key, star, cost: c.cost, family: c.family }] : [];
+  });
+  const peers = new Map<string, { n: number; sum: number }>();
+  for (const f of parsed) {
+    const k = `${f.cost}:${f.star}`;
+    const b = peers.get(k) ?? { n: 0, sum: 0 };
+    b.n += f.n;
+    b.sum += f.avg * f.n;
+    peers.set(k, b);
+  }
+  const ranked = parsed
+    .filter((f) => f.n >= minN && shrunkAvg(f.avg, f.n) <= STANDOUT_MAX)
+    .map((f) => {
+      const b = peers.get(`${f.cost}:${f.star}`)!;
+      // Without the unit itself, so a lone unit at its cost and star level has no peers to beat.
+      const others = b.n - f.n;
+      const peer = others > 0 ? (b.sum - f.avg * f.n) / others : f.avg;
+      const shrunk = (f.avg * f.n + peer * PRIOR_WEIGHT) / (f.n + PRIOR_WEIGHT);
+      return { ...f, peer, edge: shrunk - peer };
+    })
+    .filter((f) => f.edge < -0.05)
+    .sort((a, b) => a.edge - b.edge);
+  const out: TopUnit[] = [];
+  const seen = new Set<string>();
+  for (const f of ranked) {
+    if (seen.has(f.family)) continue;
+    seen.add(f.family);
+    out.push({ id: f.key, star: f.star, n: f.n, avg: f.avg, top4: f.top4, win: f.win, peerAvg: f.peer });
+    if (out.length >= count) break;
+  }
+  return out.sort((a, b) => a.avg - b.avg);
+}
+
+/** The star level each cost is built toward: 1 and 2-costs are rerolled to 3 stars. */
+const TARGET_STAR: Record<number, number> = { 1: 3, 2: 3, 3: 2, 4: 2, 5: 1 };
+
+/** A standout also has to place well outright: a shrunk average of 4.2 or better. */
+const STANDOUT_MAX = 4.2;
+
+/** Items need fewer games than champions for a stable row. */
+export const itemMinSample = (minN: number) => Math.max(5, Math.round(minN * 0.6));

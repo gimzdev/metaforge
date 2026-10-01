@@ -1,4 +1,4 @@
-/** Typed access to environment configuration, with v1 variable names as fallbacks. */
+/** Typed access to environment configuration, with older variable names as fallbacks. */
 
 function str(...names: string[]): string {
   for (const name of names) {

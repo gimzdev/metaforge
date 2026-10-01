@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next';
-import { getStaticData } from '@/lib/cdragon';
+import { getStaticData } from '@/lib/static/load';
 import { env } from '@/lib/env';
 
 export const dynamic = 'force-dynamic';

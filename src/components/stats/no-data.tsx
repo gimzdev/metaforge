@@ -1,7 +1,6 @@
-import { Radio, KeyRound, Database, TriangleAlert } from 'lucide-react';
+import { Radio, KeyRound, Database, TriangleAlert } from '@/components/icons';
 import { env } from '@/lib/env';
-import { ingestRunning, lastIngestReport } from '@/lib/ingest';
-import { schedulerInfo } from '@/lib/ingest/scheduler';
+import { ingestRunning, lastIngestReport, schedulerInfo } from '@/lib/ingest';
 import { getStore } from '@/lib/store';
 import { fmt } from '@/lib/utils';
 

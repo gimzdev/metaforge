@@ -1,6 +1,6 @@
 import { configuredSetNumber, QUEUES } from '@/config/game';
 import { cachedAsync } from '@/lib/cache';
-import { matchToRecords, queueOf } from '@/lib/ingest/normalize';
+import { matchToRecords, queueOf } from '@/lib/ingest';
 import {
   getAccountByPuuid,
   getAccountByRiotId,
@@ -10,11 +10,12 @@ import {
   getMatch,
   getMatchIds,
   getSummoner,
+  RiotError,
   type LadderTier,
+  type LeagueEntryDto,
+  type MatchDto,
 } from '@/lib/riot/api';
-import { RiotError } from '@/lib/riot/client';
 import { getPlatform, normalizePlatform, PLATFORMS } from '@/lib/riot/regions';
-import type { LeagueEntryDto, MatchDto } from '@/lib/riot/types';
 import { getStore } from '@/lib/store';
 
 export interface PlayerProfile {
@@ -90,7 +91,7 @@ export interface MatchView {
   lobby: BoardView[];
 }
 
-export function toMatchView(match: MatchDto, puuid: string): MatchView {
+function toMatchView(match: MatchDto, puuid: string): MatchView {
   const queue = queueOf(match);
   const lobby: BoardView[] = (match.info.participants ?? [])
     .map((p) => ({
@@ -133,7 +134,7 @@ export async function getPlayerMatches(puuid: string, platform: string, start = 
   const views: Array<MatchView | null> = new Array(ids.length).fill(null);
   let next = 0;
   await Promise.all(
-    Array.from({ length: Math.min(4, ids.length) }, async () => {
+    Array.from({ length: Math.min(10, ids.length) }, async () => {
       while (next < ids.length) {
         const i = next++;
         try {
@@ -155,7 +156,7 @@ export async function getPlayerMatches(puuid: string, platform: string, start = 
   return views.filter((v): v is MatchView => Boolean(v));
 }
 
-export interface LadderEntry {
+interface LadderEntry {
   rank: number;
   puuid: string;
   /** Server the player is ranked on. */
@@ -241,4 +242,49 @@ export async function getLeaderboard(platformInput: string, limit = 100) {
     }));
     return { platform, updatedAt: Date.now(), entries };
   });
+}
+
+/* ── Ranked tier display ────────────────────────────────── */
+
+const TIER_COLOR: Record<string, string> = {
+  IRON: '#8d807a',
+  BRONZE: '#c08a5f',
+  SILVER: '#b7c4ce',
+  GOLD: '#e9bd5b',
+  PLATINUM: '#4fc9b8',
+  EMERALD: '#38c983',
+  DIAMOND: '#7d98ff',
+  MASTER: '#c07bff',
+  GRANDMASTER: '#ff6b78',
+  CHALLENGER: '#f9d977',
+  // Hyper Roll rated tiers
+  GRAY: '#a3adb5',
+  GREEN: '#5fd08b',
+  BLUE: '#5aa9ff',
+  PURPLE: '#b98bff',
+  HYPER: '#ff9a4d',
+  ORANGE: '#ff9a4d',
+};
+
+export function tierColor(tier: string | null | undefined): string {
+  return TIER_COLOR[(tier ?? '').toUpperCase()] ?? '#9cb4a8';
+}
+
+function tierName(tier: string | null | undefined): string {
+  const t = (tier ?? '').toLowerCase();
+  if (!t) return 'Unranked';
+  if (t === 'grandmaster') return 'Grandmaster';
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+const APEX = new Set(['MASTER', 'GRANDMASTER', 'CHALLENGER']);
+
+export function rankLabel(tier?: string | null, division?: string | null): string {
+  if (!tier) return 'Unranked';
+  return APEX.has(tier.toUpperCase()) || !division ? tierName(tier) : `${tierName(tier)} ${division}`;
+}
+
+export function profileIconUrl(id: number | null | undefined): string | null {
+  if (id === null || id === undefined) return null;
+  return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/${id}.jpg`;
 }

@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { SESSION_COOKIE, STATE_COOKIE, sessionCookieOptions, signSession } from '@/lib/auth/session';
+import { SESSION_COOKIE, STATE_COOKIE, sessionCookieOptions, signSession } from '@/lib/auth';
 import { env } from '@/lib/env';
-import { riotGet } from '@/lib/riot/client';
-import type { AccountDto } from '@/lib/riot/types';
+import { riotGet, type AccountDto } from '@/lib/riot/api';
 
 export const dynamic = 'force-dynamic';
 

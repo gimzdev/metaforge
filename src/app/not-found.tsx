@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { PlayerSearch } from '@/components/player/player-search';
-import { buttonClass } from '@/components/ui/button';
+import { buttonClass } from '@/components/ui';
 
 export default function NotFound() {
   return (

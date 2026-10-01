@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import type { LucideIcon } from 'lucide-react';
+import type { LucideIcon } from '@/components/icons';
 import {
   ArrowDown,
   ArrowLeftRight,
@@ -12,7 +12,7 @@ import {
   Sparkles,
   Undo2,
   Wrench,
-} from 'lucide-react';
+} from '@/components/icons';
 import { configuredSetNumber, currentPatch, getSetInfo } from '@/config/game';
 import {
   ESPORTS,
@@ -25,12 +25,12 @@ import {
   type PatchNote,
 } from '@/content/news';
 import { AugmentIcon, ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
-import { HScroll } from '@/components/ui/hscroll';
-import { PageHeader } from '@/components/ui/primitives';
-import { getStaticData } from '@/lib/cdragon';
+import { PageHeader } from '@/components/ui';
+import { HScroll } from '@/components/ui-client';
 import { param, type SearchParams } from '@/lib/search-params';
+import { getStaticData } from '@/lib/static/load';
+import type { StaticData } from '@/lib/static/types';
 import { cn, fmt, slugify } from '@/lib/utils';
-import type { StaticData } from '@/types/static';
 
 export const dynamic = 'force-dynamic';
 
@@ -205,41 +205,39 @@ function noteFor(p: PatchWindow, today: string): PatchNote | undefined {
 function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; live?: string; selected: PatchNote; today: string }) {
   const liveAt = patches.findIndex((p) => p.label === live);
   return (
-    <HScroll className="-mx-4 px-4 sm:-mx-6 sm:px-6">
-      <ol aria-label="Patches this set" className="grid min-w-[48rem] auto-cols-fr grid-flow-col pb-1">
+    <HScroll className="rounded-xl border border-line-strong bg-canopy shadow-[0_20px_50px_-30px_rgb(0_0_0/0.9)]">
+      <ol aria-label="Patches this set" className="grid min-w-[52rem] auto-cols-fr grid-flow-col px-3 py-2">
         {patches.map((p, i) => {
           const note = noteFor(p, today);
           const future = p.start > today;
           const isLive = p.label === live;
           const on = note?.id === selected.id && note?.label === p.label;
-          const line = (from: number) => (from < liveAt ? 'border-lichen/35' : 'border-dashed border-line-strong');
+          const line = (from: number) => (from < liveAt ? 'border-solid border-lichen/45' : 'border-dashed border-lichen/25');
+          const dot = on ? (
+            <span className="size-[18px] rounded-full bg-wisp ring-[5px] ring-wisp/20" />
+          ) : isLive ? (
+            <span className="grid size-[16px] place-items-center rounded-full border-2 border-good">
+              <span className="size-[6px] rounded-full bg-good" />
+            </span>
+          ) : future ? (
+            <span className="size-[14px] rounded-full border-2 border-dashed border-fog/60" />
+          ) : note ? (
+            <span className="size-[14px] rounded-full bg-lichen transition-colors group-hover:bg-moon" />
+          ) : (
+            <span className="size-[14px] rounded-full border-2 border-lichen/50" />
+          );
           const body = (
             <>
+              <span className="relative z-10 grid size-[24px] place-items-center rounded-full bg-canopy">{dot}</span>
               <span
                 className={cn(
-                  'relative z-10 grid size-[19px] place-items-center rounded-full border-2 bg-night transition-colors',
-                  on
-                    ? 'border-wisp bg-wisp ring-4 ring-wisp/15'
-                    : isLive
-                      ? 'border-good'
-                      : future
-                        ? 'border-dashed border-line-strong'
-                        : note
-                          ? 'border-lichen/70 group-hover:border-moon'
-                          : 'border-lichen/40',
-                )}
-              >
-                {isLive && !on && <span className="size-[7px] rounded-full bg-good" />}
-              </span>
-              <span
-                className={cn(
-                  'num mt-2.5 text-[15px] font-semibold leading-none transition-colors',
-                  on ? 'text-wisp' : future ? 'text-fog' : 'text-moon group-hover:text-wisp',
+                  'num mt-3 text-[17px] font-semibold leading-none transition-colors',
+                  on ? 'text-wisp' : future ? 'text-lichen' : 'text-moon group-hover:text-wisp',
                 )}
               >
                 {p.label}
               </span>
-              <span className="mt-1.5 whitespace-nowrap text-xs text-fog">
+              <span className={cn('mt-1.5 whitespace-nowrap text-[13px]', on ? 'text-moon' : 'text-lichen')}>
                 {isLive ? (
                   <>
                     <span className="font-medium text-good">Live</span> · {fmt.date(`${p.start}T12:00:00Z`)}
@@ -250,11 +248,12 @@ function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; 
               </span>
             </>
           );
+          const box = cn('flex flex-col items-center rounded-lg px-3 pb-3 pt-3', on && 'bg-wisp/[0.09]');
           return (
             <li key={p.label} className="relative flex justify-center">
-              {i > 0 && <span aria-hidden className={cn('absolute left-0 right-1/2 top-[9px] border-t', line(i - 1))} />}
+              {i > 0 && <span aria-hidden className={cn('absolute left-0 right-1/2 top-[24px] border-t-2', line(i - 1))} />}
               {i < patches.length - 1 && (
-                <span aria-hidden className={cn('absolute left-1/2 right-0 top-[9px] border-t', line(i))} />
+                <span aria-hidden className={cn('absolute left-1/2 right-0 top-[24px] border-t-2', line(i))} />
               )}
               {note && !future ? (
                 <Link
@@ -262,12 +261,12 @@ function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; 
                   scroll={false}
                   aria-current={on ? 'page' : undefined}
                   title={note.label === p.label ? note.title : `Covered in the ${note.label} notes`}
-                  className="group flex flex-col items-center rounded-lg px-2 outline-none focus-visible:ring-2 focus-visible:ring-wisp/60"
+                  className={cn(box, 'group outline-none transition-colors focus-visible:ring-2 focus-visible:ring-wisp/60', on ? 'hover:bg-wisp/[0.09]' : 'hover:bg-white/[0.05]')}
                 >
                   {body}
                 </Link>
               ) : (
-                <div className="flex flex-col items-center px-2" title={future ? (p.tentative ? 'Planned' : 'Upcoming') : undefined}>
+                <div className={box} title={future ? (p.tentative ? 'Planned' : 'Upcoming') : undefined}>
                   {body}
                 </div>
               )}
@@ -298,11 +297,7 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
   return (
     <div className="space-y-10">
       <div className="space-y-9">
-        <PageHeader
-          eyebrow={`Set ${info.number} · ${info.name}`}
-          title="Patch notes"
-          description="Every patch this set, sorted into buffs, nerfs and changes. Pick one on the timeline; Riot's full notes are linked on each."
-        />
+        <PageHeader title="Patch notes" />
         <Timeline patches={info.patches} live={live} selected={note} today={today} />
       </div>
 

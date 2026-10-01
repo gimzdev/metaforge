@@ -1,16 +1,16 @@
-import { currentPatch, getSetInfo, patchWindows, RANKED_QUEUE, type ResolvedPatch } from '@/config/game';
+import { configuredSetNumber, currentPatch, patchWindows, type ResolvedPatch } from '@/config/game';
 import { singleton } from '@/lib/cache';
-import { getStaticData } from '@/lib/cdragon';
-import { env } from '@/lib/env';
-import { indexStatic } from '@/lib/static-index';
+import { getStaticData } from '@/lib/static/load';
+import { indexStatic, type StaticIndex } from '@/lib/static';
+import type { StaticData } from '@/lib/static/types';
 import { getStore } from '@/lib/store';
-import type { BoardRecord } from '@/lib/store/types';
-import type { StaticData } from '@/types/static';
+import { emptyColumns, loadColumns, type Columns } from './columns';
 import type { DatasetMeta } from './types';
 
 /**
- * Collected boards in a compact column layout (typed arrays), interned against
- * the static data. Rebuilt every few minutes or right after a collection run.
+ * The stored boards interned against the game data in typed arrays, which the
+ * engine scans. Built from the compact columns (see columns.ts): only matches the
+ * store hasn't delivered yet are read when something changes.
  */
 export interface Cluster {
   id: string;
@@ -32,7 +32,6 @@ export interface Dataset {
   augIdx: Map<string, number>;
   champCost: Uint8Array;
   traitUnique: Uint8Array;
-  traitTiers: Uint8Array;
   regions: string[];
   patches: ResolvedPatch[];
   N: number;
@@ -40,7 +39,6 @@ export interface Dataset {
   level: Uint8Array;
   region: Uint8Array;
   patch: Uint8Array;
-  ts: Uint32Array;
   uStart: Uint32Array;
   uChamp: Uint16Array;
   uStar: Uint8Array;
@@ -61,29 +59,31 @@ export interface Dataset {
 export const NO_PATCH = 255;
 /** How often to ask the store whether new matches arrived. */
 const CHECK_MS = 60_000;
-/** Rebuild at least this often even without new matches (rolling time windows, patch changes). */
-const MAX_AGE_MS = 30 * 60_000;
 
 const gen = () => singleton('dataset-gen', () => ({ n: 1 }));
 
 interface Holder {
   ds: Dataset | null;
+  columns: Columns | null;
+  /** The match list of the columns `ds` was built from. */
+  builtFrom: string[] | null;
   token: string;
   gen: number;
+  windows: string;
   checkedAt: number;
   refreshing: Promise<Dataset> | null;
 }
 const holder = () =>
-  singleton<Holder>('dataset-holder', () => ({ ds: null, token: '', gen: 0, checkedAt: 0, refreshing: null }));
+  singleton<Holder>('dataset-holder', () => ({ ds: null, columns: null, builtFrom: null, token: '', gen: 0, windows: '', checkedAt: 0, refreshing: null }));
 
-/** Force a rebuild on the next request (called after a collection run stores matches). */
-export function invalidateDataset() {
+/** Force a rebuild on the next request (after a collection run stores matches). */
+function invalidateDataset() {
   gen().n++;
 }
 
 /**
- * The current dataset. Serves the loaded copy immediately and refreshes it in
- * the background when the store reports new matches, so pages stay fast.
+ * The current dataset. Serves the loaded copy immediately and refreshes it in the
+ * background when the store reports new matches or a new patch starts.
  */
 export function getDataset(): Promise<Dataset> {
   const h = holder();
@@ -106,245 +106,191 @@ export function getDataset(): Promise<Dataset> {
 async function refresh(h: Holder): Promise<Dataset> {
   const g = gen().n;
   const data = await getStaticData();
+  const setNumber = data.set.number;
   const store = getStore();
-  let token = '';
-  try {
-    token = await store.changeToken(data.set.number);
-  } catch {
-    token = `unknown:${Date.now()}`;
-  }
-  const current = h.ds;
-  if (
-    current &&
-    current.static === data &&
-    h.gen === g &&
-    token === h.token &&
-    Date.now() - current.meta.builtAt < MAX_AGE_MS
-  ) {
+  const token = await store.changeToken(setNumber).catch(() => `unknown:${Date.now()}`);
+  const windows = patchWindows(setNumber)
+    .map((p) => p.label)
+    .join();
+  if (h.ds && h.ds.static === data && h.gen === g && token === h.token && windows === h.windows) {
     h.checkedAt = Date.now();
-    return current;
+    return h.ds;
   }
-  const ds = await loadDataset(g, data);
-  h.ds = ds;
-  h.token = token;
-  h.gen = g;
-  h.checkedAt = Date.now();
+  let error: string | null = null;
+  let columns = h.columns;
+  if (!columns || token !== h.token || h.gen !== g) {
+    try {
+      columns = await loadColumns(h.columns, setNumber);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      console.error('[metaforge] could not load boards:', error);
+    }
+  }
+  // The same boards (nothing new in range) and the same game data: keep the built dataset.
+  const same = h.ds && !h.ds.meta.error && !error && h.ds.static === data && windows === h.windows && columns?.matches === h.builtFrom;
+  const ds = same ? h.ds! : buildDataset(columns ?? emptyColumns(), data, { version: g, source: store.describe(), error });
+  // After a failed read, keep no token so the next check (a minute later) reads again.
+  Object.assign(h, { ds, columns, builtFrom: columns?.matches ?? null, token: error ? '' : token, gen: g, windows, checkedAt: Date.now() });
   return ds;
 }
 
-async function loadDataset(version: number, data: StaticData): Promise<Dataset> {
-  const setNumber = data.set.number;
-  const info = getSetInfo(setNumber);
-  const setStart = Date.parse(`${info.start}T00:00:00Z`);
-  const since = Number.isFinite(setStart) ? setStart : Date.now() - 90 * 86_400_000;
-  const store = getStore();
-  const builder = new DatasetBuilder(data);
-  let error: string | null = null;
-  try {
-    await store.forEachBoard({ setNumber, queueId: RANKED_QUEUE, since, limit: env.maxBoards }, (b) => builder.add(b));
-  } catch (e) {
-    error = e instanceof Error ? e.message : String(e);
-    console.error('[metaforge] could not load boards:', error);
-  }
-  return builder.finish({ version, source: store.describe(), error });
+/** After a collection run: bring the columns up to date and save them for other servers. */
+export async function refreshStoredBoards() {
+  const h = holder();
+  h.columns = await loadColumns(h.columns, configuredSetNumber(), { persist: true });
+  invalidateDataset();
 }
 
-class Interner {
-  keys: string[] = [];
-  map = new Map<string, number>();
-  add(key: string) {
-    let i = this.map.get(key);
-    if (i === undefined) {
-      i = this.keys.length;
-      this.keys.push(key);
-      this.map.set(key, i);
-    }
-    return i;
-  }
-}
-
-/** Turns board records into the column layout, one record at a time. */
-export class DatasetBuilder {
-  private index;
-  private champs = new Interner();
-  private items = new Interner();
-  private traits = new Interner();
-  private augs = new Interner();
-  private regions = new Interner();
-  private patches: ResolvedPatch[];
-  private place: number[] = [];
-  private level: number[] = [];
-  private region: number[] = [];
-  private patch: number[] = [];
-  private ts: number[] = [];
-  private uStart: number[] = [0];
-  private uChamp: number[] = [];
-  private uStar: number[] = [];
-  private iStart: number[] = [0];
-  private iItem: number[] = [];
-  private tStart: number[] = [0];
-  private tTrait: number[] = [];
-  private tTier: number[] = [];
-  private tUnits: number[] = [];
-  private tStyle: number[] = [];
-  private aStart: number[] = [0];
-  private aAug: number[] = [];
-  private newest = 0;
-  private oldest = Number.POSITIVE_INFINITY;
-
-  constructor(private data: StaticData) {
-    this.index = indexStatic(data);
-    // Intern every known entity up front so indices are stable and complete.
-    for (const c of data.champions) this.champs.add(c.key);
-    for (const i of data.items) this.items.add(i.key);
-    for (const t of data.traits) this.traits.add(t.key);
-    for (const a of data.augments) this.augs.add(a.key);
-    this.patches = patchWindows(data.set.number);
-  }
-
-  private patchOf(ms: number) {
-    for (let i = this.patches.length - 1; i >= 0; i--) if (ms >= this.patches[i].start) return i;
+/** Intern the columns against the game data and group the boards into comps. */
+function buildDataset(c: Columns, data: StaticData, opts: { version: number; source: string; error: string | null }): Dataset {
+  const index = indexStatic(data);
+  const keys = <T extends { key: string }>(list: T[]) => list.map((e) => e.key);
+  const toIdx = (list: string[]) => new Map(list.map((k, i) => [k, i]));
+  const champKeys = keys(data.champions);
+  const itemKeys = keys(data.items);
+  const traitKeys = keys(data.traits);
+  const augKeys = keys(data.augments);
+  const champIdx = toIdx(champKeys);
+  const itemIdx = toIdx(itemKeys);
+  const traitIdx = toIdx(traitKeys);
+  const augIdx = toIdx(augKeys);
+  const uMap = Int32Array.from(c.units, (k) => champIdx.get(k) ?? -1);
+  const iMap = Int32Array.from(c.items, (k) => itemIdx.get(index.itemKey(k)) ?? -1);
+  const tMap = Int32Array.from(c.traits, (k) => traitIdx.get(k) ?? -1);
+  const aMap = Int32Array.from(c.augs, (k) => augIdx.get(k) ?? -1);
+  const patches = patchWindows(data.set.number);
+  const patchOf = (ms: number) => {
+    for (let i = patches.length - 1; i >= 0; i--) if (ms >= patches[i].start) return i;
     return NO_PATCH;
-  }
+  };
 
-  add(r: BoardRecord) {
-    if (!(r.placement >= 1 && r.placement <= 8) || !Array.isArray(r.units)) return;
-    const unitMark = this.uChamp.length;
-    const itemMark = this.iItem.length;
-    const itemStarts = this.iStart.length;
-    let unitsAdded = 0;
-    for (const u of r.units) {
-      const c = this.champs.map.get(String(u[0]).toLowerCase());
-      if (c === undefined) continue; // summons, props, retired units
-      this.uChamp.push(c);
-      this.uStar.push(Math.min(4, Math.max(1, Number(u[1]) || 1)));
-      for (const it of Array.isArray(u[2]) ? u[2] : []) {
-        const i = this.items.map.get(this.index.itemKey(String(it)));
-        if (i !== undefined) this.iItem.push(i);
+  const regions: string[] = [];
+  const regionIdx = new Map<string, number>();
+  const place: number[] = [], level: number[] = [], region: number[] = [], patch: number[] = [];
+  const uStart = [0], uChamp: number[] = [], uStar: number[] = [];
+  const iStart = [0], iItem: number[] = [];
+  const tStart = [0], tTrait: number[] = [], tTier: number[] = [], tUnits: number[] = [], tStyle: number[] = [];
+  const aStart = [0], aAug: number[] = [];
+  let newest = 0;
+  let oldest = Number.POSITIVE_INFINITY;
+  let b = 0, u = 0, i = 0, t = 0, a = 0;
+  for (let m = 0; m < c.matches.length; m++) {
+    const time = c.mTime[m];
+    const p = patchOf(time);
+    for (let end = b + c.mBoards[m]; b < end; b++) {
+      const units = c.uCount[b];
+      const mark = uChamp.length;
+      for (let ue = u + units; u < ue; u++) {
+        const items = c.iCount[u];
+        const champ = uMap[c.uId[u]];
+        if (champ >= 0) {
+          // Summons, props and retired units are left out.
+          uChamp.push(champ);
+          uStar.push(c.uStar[u]);
+          for (let ie = i + items; i < ie; i++) if (iMap[c.iId[i]] >= 0) iItem.push(iMap[c.iId[i]]);
+          iStart.push(iItem.length);
+        } else i += items;
       }
-      this.iStart.push(this.iItem.length);
-      unitsAdded++;
+      const traits = c.tCount[b];
+      const augs = c.aCount[b];
+      if (uChamp.length === mark) {
+        t += traits;
+        a += augs;
+        continue; // nothing usable on this board
+      }
+      uStart.push(uChamp.length);
+      for (let te = t + traits; t < te; t++) {
+        const ti = tMap[c.tId[t]];
+        if (ti < 0) continue;
+        tTrait.push(ti);
+        tUnits.push(c.tUnits[t]);
+        tStyle.push(c.tStyle[t]);
+        tTier.push(c.tTier[t]);
+      }
+      tStart.push(tTrait.length);
+      for (let ae = a + augs; a < ae; a++) if (aMap[c.aId[a]] >= 0) aAug.push(aMap[c.aId[a]]);
+      aStart.push(aAug.length);
+      const name = c.regions[c.mRegion[m]];
+      let r = regionIdx.get(name);
+      if (r === undefined) {
+        regionIdx.set(name, (r = regions.length));
+        regions.push(name);
+      }
+      place.push(c.place[b]);
+      level.push(c.level[b]);
+      region.push(r);
+      patch.push(p);
+      if (time > newest) newest = time;
+      if (time < oldest) oldest = time;
     }
-    if (!unitsAdded) {
-      // Nothing usable on this board; roll back partial pushes.
-      this.uChamp.length = unitMark;
-      this.uStar.length = unitMark;
-      this.iItem.length = itemMark;
-      this.iStart.length = itemStarts;
-      return;
-    }
-    this.uStart.push(this.uChamp.length);
-    for (const t of Array.isArray(r.traits) ? r.traits : []) {
-      const ti = this.traits.map.get(String(t[0]).toLowerCase());
-      if (ti === undefined || !(Number(t[3]) > 0)) continue;
-      this.tTrait.push(ti);
-      this.tUnits.push(Math.min(255, Number(t[1]) || 0));
-      this.tStyle.push(Number(t[2]) || 0);
-      this.tTier.push(Math.min(15, Number(t[3]) || 0));
-    }
-    this.tStart.push(this.tTrait.length);
-    for (const a of Array.isArray(r.augments) ? r.augments : []) {
-      const ai = this.augs.map.get(String(a).toLowerCase());
-      if (ai !== undefined) this.aAug.push(ai);
-    }
-    this.aStart.push(this.aAug.length);
-    this.place.push(r.placement);
-    this.level.push(Math.min(15, Math.max(0, r.level || 0)));
-    this.region.push(this.regions.add(r.platform || 'unknown'));
-    this.patch.push(this.patchOf(r.datetime));
-    this.ts.push(Math.floor(r.datetime / 1000));
-    if (r.datetime > this.newest) this.newest = r.datetime;
-    if (r.datetime < this.oldest) this.oldest = r.datetime;
   }
 
-  finish(opts: { version: number; source: string; error: string | null }): Dataset {
-    const { data, index, champs, traits, regions, patches } = this;
-    const N = this.place.length;
-    const champCost = new Uint8Array(champs.keys.length);
-    champs.keys.forEach((k, i) => (champCost[i] = index.champion(k)?.cost ?? 0));
-    const traitUnique = new Uint8Array(traits.keys.length);
-    const traitTiers = new Uint8Array(traits.keys.length);
-    traits.keys.forEach((k, i) => {
-      const t = index.trait(k);
-      traitUnique[i] = t?.kind === 'unique' ? 1 : 0;
-      traitTiers[i] = t?.effects.length ?? 0;
-    });
+  const N = place.length;
+  const champCost = Uint8Array.from(champKeys, (k) => index.champion(k)?.cost ?? 0);
+  const traitUnique = Uint8Array.from(traitKeys, (k) => (index.trait(k)?.kind === 'unique' ? 1 : 0));
+  const ds: Dataset = {
+    version: opts.version,
+    static: data,
+    champKeys,
+    itemKeys,
+    traitKeys,
+    augKeys,
+    champIdx,
+    itemIdx,
+    traitIdx,
+    augIdx,
+    champCost,
+    traitUnique,
+    regions,
+    patches,
+    N,
+    place: Uint8Array.from(place),
+    level: Uint8Array.from(level),
+    region: Uint8Array.from(region),
+    patch: Uint8Array.from(patch),
+    uStart: Uint32Array.from(uStart),
+    uChamp: Uint16Array.from(uChamp),
+    uStar: Uint8Array.from(uStar),
+    iStart: Uint32Array.from(iStart),
+    iItem: Uint16Array.from(iItem),
+    tStart: Uint32Array.from(tStart),
+    tTrait: Uint16Array.from(tTrait),
+    tTier: Uint8Array.from(tTier),
+    tUnits: Uint8Array.from(tUnits),
+    tStyle: Uint8Array.from(tStyle),
+    aStart: Uint32Array.from(aStart),
+    aAug: Uint16Array.from(aAug),
+    comp: new Int32Array(N).fill(-1),
+    clusters: [],
+    meta: {
+      source: opts.source,
+      error: opts.error,
+      total: N,
+      builtAt: Date.now(),
+      hasAugments: aAug.length > 0,
+      newest: N ? newest : null,
+      oldest: N ? oldest : null,
+      patches: [],
+      regions: [],
+      currentPatch: currentPatch(data.set.number)?.label ?? null,
+    },
+  };
 
-    const ds: Dataset = {
-      version: opts.version,
-      static: data,
-      champKeys: champs.keys,
-      itemKeys: this.items.keys,
-      traitKeys: traits.keys,
-      augKeys: this.augs.keys,
-      champIdx: champs.map,
-      itemIdx: this.items.map,
-      traitIdx: traits.map,
-      augIdx: this.augs.map,
-      champCost,
-      traitUnique,
-      traitTiers,
-      regions: regions.keys,
-      patches,
-      N,
-      place: Uint8Array.from(this.place),
-      level: Uint8Array.from(this.level),
-      region: Uint8Array.from(this.region),
-      patch: Uint8Array.from(this.patch),
-      ts: Uint32Array.from(this.ts),
-      uStart: Uint32Array.from(this.uStart),
-      uChamp: Uint16Array.from(this.uChamp),
-      uStar: Uint8Array.from(this.uStar),
-      iStart: Uint32Array.from(this.iStart),
-      iItem: Uint16Array.from(this.iItem),
-      tStart: Uint32Array.from(this.tStart),
-      tTrait: Uint16Array.from(this.tTrait),
-      tTier: Uint8Array.from(this.tTier),
-      tUnits: Uint8Array.from(this.tUnits),
-      tStyle: Uint8Array.from(this.tStyle),
-      aStart: Uint32Array.from(this.aStart),
-      aAug: Uint16Array.from(this.aAug),
-      comp: new Int32Array(N).fill(-1),
-      clusters: [],
-      meta: {
-        source: opts.source,
-        error: opts.error,
-        total: N,
-        builtAt: Date.now(),
-        hasAugments: this.aAug.length > 0,
-        newest: N ? this.newest : null,
-        oldest: N ? this.oldest : null,
-        patches: [],
-        regions: [],
-        currentPatch: currentPatch(data.set.number)?.label ?? null,
-      },
-    };
+  assignClusters(ds);
 
-    assignClusters(ds);
-
-    const patchCounts = new Array(patches.length).fill(0);
-    const regionCounts = new Array(regions.keys.length).fill(0);
-    for (let b = 0; b < N; b++) {
-      if (ds.patch[b] !== NO_PATCH) patchCounts[ds.patch[b]]++;
-      regionCounts[ds.region[b]]++;
-    }
-    ds.meta.patches = patches.map((p, i) => ({ label: p.label, boards: patchCounts[i], tentative: p.tentative }));
-    ds.meta.regions = regions.keys
-      .map((id, i) => ({ id, boards: regionCounts[i] }))
-      .sort((a, b) => b.boards - a.boards);
-    return ds;
+  const patchCounts = new Array(patches.length).fill(0);
+  const regionCounts = new Array(regions.length).fill(0);
+  for (let k = 0; k < N; k++) {
+    if (ds.patch[k] !== NO_PATCH) patchCounts[ds.patch[k]]++;
+    regionCounts[ds.region[k]]++;
   }
+  ds.meta.patches = patches.map((p, k) => ({ label: p.label, boards: patchCounts[k], tentative: p.tentative }));
+  ds.meta.regions = regions.map((id, k) => ({ id, boards: regionCounts[k] })).sort((x, y) => y.boards - x.boards);
+  return ds;
 }
 
-export function buildDataset(
-  records: BoardRecord[],
-  data: StaticData,
-  opts: { version: number; source: string; error: string | null },
-): Dataset {
-  const builder = new DatasetBuilder(data);
-  for (const r of records) builder.add(r);
-  return builder.finish(opts);
-}
+/** Damage value of a real carry build: roughly two completed damage items. */
+const DUO_DAMAGE = 3;
 
 /** How much of an item's value is damage: completed items inherit it from their two components. */
 const COMPONENT_OFFENSE: Record<string, number> = {
@@ -360,7 +306,7 @@ const COMPONENT_OFFENSE: Record<string, number> = {
   tft_item_giantsbelt: 0,
 };
 
-function itemOffense(ds: Dataset, index: ReturnType<typeof indexStatic>) {
+function itemOffense(ds: Dataset, index: StaticIndex<StaticData>) {
   const byName = new Map(ds.static.items.map((i) => [i.name.toLowerCase(), i]));
   const weight = (key: string, depth = 0): number => {
     const item = index.item(key);
@@ -383,12 +329,14 @@ function itemOffense(ds: Dataset, index: ReturnType<typeof indexStatic>) {
  * Group boards into comps the way players name them.
  *
  * 1. Every board gets a carry: the unit whose items do the most damage (a tank
- *    in three armor items is not the carry). A second unit holding at least one
- *    damage item is a second carry, so "Aphelios + Nidalee" boards group together.
+ *    in three armor items is not the carry). A second unit only makes it a duo
+ *    ("Aphelios & Nidalee") when it holds a damage build of its own and shares a
+ *    trait with the carry, so a legendary that picked up a stray item late in
+ *    the game doesn't turn into a co-carry.
  * 2. Groups that field nearly the same eight units (same comp, items landed on
  *    a different unit that game) are merged into the bigger group.
- * 3. Names: "Aphelios & Nidalee" for two-carry comps, otherwise the carry and
- *    its strongest active trait ("Inferno Kha'Zix").
+ * 3. Names come from the whole merged group: its usual carry and trait
+ *    ("Inferno Kha'Zix"), or both carries when most of its boards run the duo.
  */
 function assignClusters(ds: Dataset) {
   const index = indexStatic(ds.static);
@@ -422,7 +370,8 @@ function assignClusters(ds: Dataset) {
       let damage = 0;
       for (let i = ds.iStart[u]; i < ds.iStart[u + 1]; i++) damage += offense[ds.iItem[i]];
       const c = ds.uChamp[u];
-      const score = damage * 100 + (ds.iStart[u + 1] - ds.iStart[u]) * 20 + ds.champCost[c] * 5 + ds.uStar[u];
+      // Damage decides; then more items, a higher star level (a 3-star reroll carry), then cost.
+      const score = damage * 100 + (ds.iStart[u + 1] - ds.iStart[u]) * 20 + ds.uStar[u] * 8 + ds.champCost[c] * 2;
       if (score > firstScore) {
         if (first >= 0 && first !== c) [second, secondScore, secondDamage] = [first, firstScore, firstDamage];
         [first, firstScore, firstDamage] = [c, score, damage];
@@ -431,17 +380,27 @@ function assignClusters(ds: Dataset) {
       }
     }
     if (first < 0) continue;
-    // A second carry needs a real damage item (a lone component is not enough).
-    const pair = second >= 0 && secondDamage >= 1.5 && firstDamage >= 1.5;
+    // A duo needs two real damage builds (about two damage items each) on units that play together.
+    const pair =
+      second >= 0 &&
+      firstDamage >= DUO_DAMAGE &&
+      secondDamage >= DUO_DAMAGE &&
+      secondDamage >= firstDamage * 0.6 &&
+      champTraits[first].some((t) => !ds.traitUnique[t] && champTraits[second].includes(t));
+    // The comp's trait: the carry's strongest trait, unless the board runs a clearly bigger one.
     let trait = -1;
     let traitScore = -1;
+    let boardTrait = -1;
+    let boardScore = -1;
     const own = champTraits[first];
     for (let t = ds.tStart[b]; t < ds.tStart[b + 1]; t++) {
       const ti = ds.tTrait[t];
-      if (ds.traitUnique[ti] || !own.includes(ti)) continue;
+      if (ds.traitUnique[ti]) continue;
       const score = ds.tStyle[t] * 100 + ds.tUnits[t];
-      if (score > traitScore) [trait, traitScore] = [ti, score];
+      if (score > boardScore) [boardTrait, boardScore] = [ti, score];
+      if (own.includes(ti) && score > traitScore) [trait, traitScore] = [ti, score];
     }
+    if (boardTrait >= 0 && (trait < 0 || Math.floor(boardScore / 100) > Math.floor(traitScore / 100))) trait = boardTrait;
     const a = pair ? Math.min(first, second) : first;
     const bb = pair ? Math.max(first, second) : -1;
     const key = pair ? `${a}|${bb}` : `${a}|-|${trait}`;
@@ -491,6 +450,34 @@ function assignClusters(ds: Dataset) {
     else if (sigs[s].n >= 3) targets.push(s);
   }
 
+  // What each surviving group plays: which carry leads it, how often it runs a duo, which trait.
+  interface Group {
+    n: number;
+    lead: Map<number, number>;
+    pairs: Map<string, number>;
+    traits: Map<number, number>;
+  }
+  const bump = <K,>(m: Map<K, number>, k: K, v: number) => m.set(k, (m.get(k) ?? 0) + v);
+  const top = <K,>(m: Map<K, number>): [K, number] | null => {
+    let best: [K, number] | null = null;
+    for (const [k, v] of m) if (!best || v > best[1]) best = [k, v];
+    return best;
+  };
+  const groups = new Map<number, Group>();
+  for (let s = 0; s < sigs.length; s++) {
+    const r = root(s);
+    const sig = sigs[s];
+    let g = groups.get(r);
+    if (!g) groups.set(r, (g = { n: 0, lead: new Map(), pairs: new Map(), traits: new Map() }));
+    g.n += sig.n;
+    if (sig.b >= 0) {
+      bump(g.lead, sig.a, sig.primary[0]);
+      bump(g.lead, sig.b, sig.primary[1]);
+      bump(g.pairs, `${sig.a}|${sig.b}`, sig.n);
+    } else bump(g.lead, sig.a, sig.n);
+    for (const [t, n] of sig.traits) bump(g.traits, t, n);
+  }
+
   // Name the surviving groups and point every board at its group.
   const clusterOf = new Map<number, number>();
   const usedIds = new Set<string>();
@@ -499,24 +486,27 @@ function assignClusters(ds: Dataset) {
     const r = root(boardSig[b]);
     let k = clusterOf.get(r);
     if (k === undefined) {
-      const sig = sigs[r];
+      const g = groups.get(r)!;
       k = ds.clusters.length;
       const champ = (c: number) => index.champion(ds.champKeys[c]);
       const who = (c: number) => champ(c)?.baseName || champ(c)?.name || 'Flex';
+      const carry = top(g.lead)?.[0] ?? sigs[r].a;
+      const trait = top(g.traits)?.[0] ?? -1;
+      // A duo only when most of the group's boards run both carries.
+      let partner = -1;
+      for (const [key, n] of g.pairs) {
+        const [x, y] = key.split('|').map(Number);
+        if ((x === carry || y === carry) && n >= g.n * 0.5) partner = x === carry ? y : x;
+      }
       let name: string;
       let id: string;
-      let trait = -1;
-      for (const [t, n] of sig.traits) if (trait < 0 || n > (sig.traits.get(trait) ?? 0)) trait = t;
-      let carry = sig.a;
-      if (sig.b >= 0) {
-        const [lead, other] = sig.primary[1] > sig.primary[0] ? [sig.b, sig.a] : [sig.a, sig.b];
-        carry = lead;
-        name = `${who(lead)} & ${who(other)}`;
-        id = `${champ(lead)?.slug ?? lead}-${champ(other)?.slug ?? other}`;
+      if (partner >= 0) {
+        name = `${who(carry)} & ${who(partner)}`;
+        id = `${champ(carry)?.slug ?? carry}-${champ(partner)?.slug ?? partner}`;
       } else {
         const tr = trait >= 0 ? index.trait(ds.traitKeys[trait]) : undefined;
-        name = tr ? `${tr.name} ${who(sig.a)}` : `${who(sig.a)} Flex`;
-        id = tr ? `${tr.slug}-${champ(sig.a)?.slug ?? sig.a}` : `${champ(sig.a)?.slug ?? sig.a}-flex`;
+        name = tr ? `${tr.name} ${who(carry)}` : `${who(carry)} Flex`;
+        id = tr ? `${tr.slug}-${champ(carry)?.slug ?? carry}` : `${champ(carry)?.slug ?? carry}-flex`;
       }
       let unique = id;
       for (let i = 2; usedIds.has(unique); i++) unique = `${id}-${i}`;

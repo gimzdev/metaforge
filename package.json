@@ -1,6 +1,6 @@
 {
   "name": "metaforge",
-  "version": "3.0.0",
+  "version": "1.2.1",
   "private": true,
   "description": "MetaForge — Teamfight Tactics meta, explorer, team builder and player lookup.",
   "engines": {
@@ -15,21 +15,13 @@
     "db:init": "tsx scripts/db-init.ts"
   },
   "dependencies": {
-    "@dnd-kit/core": "6.3.1",
     "@fontsource-variable/fraunces": "5.3.0",
     "@fontsource-variable/onest": "5.3.1",
     "@next/env": "16.3.6",
-    "@tanstack/react-query": "5.104.0",
-    "clsx": "2.1.1",
-    "cmdk": "1.1.1",
-    "lucide-react": "1.48.0",
     "next": "16.3.6",
     "pg": "8.23.0",
-    "radix-ui": "1.6.7",
     "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "tailwind-merge": "3.7.0",
-    "zustand": "5.0.15"
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.3.3",

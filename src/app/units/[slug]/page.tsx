@@ -1,23 +1,18 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { FlaskConical, Hexagon } from 'lucide-react';
-import { CompRowCard } from '@/components/comps/comp-row';
+import { FlaskConical, Hexagon } from '@/components/icons';
 import { ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
 import { GameImage } from '@/components/game/game-image';
 import { RichText } from '@/components/game/rich-text';
-import { DetailHero } from '@/components/layout/detail-hero';
-import { AvgPlace } from '@/components/stats/bits';
-import { EntityTable } from '@/components/stats/entity-table';
+import { AvgPlace, CompRowCard, SummaryTiles } from '@/components/stats/bits';
 import { NoStatsNotice } from '@/components/stats/no-data';
-import { ScopeBar } from '@/components/stats/scope-bar';
-import { SummaryTiles } from '@/components/stats/summary-tiles';
-import { ButtonLink } from '@/components/ui/button';
-import { Panel } from '@/components/ui/primitives';
+import { EntityTable, ScopeBar } from '@/components/stats/table';
+import { ButtonLink, DetailHero, Panel } from '@/components/ui';
 import { autoPlace, encodeBoard } from '@/lib/builder';
-import { getStaticData } from '@/lib/cdragon';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
-import { costColor, indexStatic } from '@/lib/static-index';
+import { costColor, indexStatic, splashSources } from '@/lib/static';
+import { getStaticData } from '@/lib/static/load';
 import { encodeFilters } from '@/lib/stats/filters';
 import { getUnitStats } from '@/lib/stats/service';
 import { fmt } from '@/lib/utils';
@@ -48,8 +43,7 @@ function StatLine({ label, value }: { label: string; value: string | number | nu
 
 export default async function UnitPage({ params, searchParams }: { params: Params; searchParams: SearchParams }) {
   const [{ slug }, sp] = await Promise.all([params, searchParams]);
-  const data = await getStaticData();
-  const index = indexStatic(data);
+  const index = indexStatic(await getStaticData());
   const c = index.champion(slug);
   if (!c) notFound();
 
@@ -65,12 +59,9 @@ export default async function UnitPage({ params, searchParams }: { params: Param
   return (
     <div className="space-y-8">
       <DetailHero
-        backdrop={c.splash}
+        backdrop={splashSources(c)}
         icon={
-          <span
-            className="block rounded-xl p-[3px]"
-            style={{ background: `linear-gradient(160deg, ${costColor(c.cost)}, transparent)` }}
-          >
+          <span className="block rounded-xl p-[3px]" style={{ background: `linear-gradient(160deg, ${costColor(c.cost)}, transparent)` }}>
             <GameImage src={c.tile ?? c.icon} alt={c.name} className="size-24 rounded-[19px] sm:size-28" eager />
           </span>
         }
@@ -109,11 +100,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-6">
-          {hasStats ? (
-            <SummaryTiles summary={stats.summary} playRate={playRate} />
-          ) : (
-            <NoStatsNotice what={`${c.name} stats`} />
-          )}
+          {hasStats ? <SummaryTiles summary={stats.summary} playRate={playRate} /> : <NoStatsNotice what={`${c.name} stats`} />}
 
           {hasStats && (
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -142,9 +129,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
                         <ItemIcon key={`${it}-${i}`} id={it} px={34} />
                       ))}
                     </span>
-                    <span className="hidden min-w-0 flex-1 truncate text-sm text-lichen md:block">
-                      {b.items.map((it) => index.item(it)?.name ?? it).join(', ')}
-                    </span>
+                    <span className="hidden min-w-0 flex-1 truncate text-sm text-lichen md:block">{b.items.map((it) => index.item(it)?.name ?? it).join(', ')}</span>
                     <span className="ml-auto grid grid-cols-3 gap-4 text-right text-sm">
                       <AvgPlace value={b.avg} />
                       <span className="num text-lichen">{fmt.pct(b.top4, 0)}</span>
@@ -163,7 +148,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
         <aside className="space-y-6">
           <Panel title={c.ability.name || 'Ability'}>
             <div className="flex gap-3">
-              {c.ability.icon && <GameImage src={c.ability.icon} alt={c.ability.name} className="size-11 shrink-0 rounded-xl" />}
+              {c.ability.icon && <GameImage src={c.ability.icon} alt={c.ability.name} px={44} className="size-11 shrink-0 rounded-xl" />}
               <div className="text-sm text-lichen">
                 <RichText value={c.ability.desc} />
               </div>
@@ -174,7 +159,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
               </div>
             )}
           </Panel>
-          <Panel title="Base stats" bodyClassName="px-4 py-2 sm:px-5">
+          <Panel title="Base stats" bodyClassName="p-4 sm:p-5 px-4 py-2 sm:px-5">
             <StatLine label="Health" value={s.hp !== null ? fmt.int(s.hp) : null} />
             <StatLine label="Attack damage" value={s.damage !== null ? fmt.int(s.damage) : null} />
             <StatLine label="Attack speed" value={s.attackSpeed !== null ? s.attackSpeed.toFixed(2) : null} />
@@ -183,7 +168,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
             <StatLine label="Range" value={s.range !== null ? `${s.range} hex${s.range === 1 ? '' : 'es'}` : null} />
             <StatLine label="Crit chance" value={s.critChance !== null ? fmt.pct(s.critChance, 0) : null} />
           </Panel>
-          <Panel title="Traits" bodyClassName="space-y-3">
+          <Panel title="Traits" bodyClassName="p-4 sm:p-5 space-y-3">
             {c.traits.map((t) => {
               const trait = index.trait(t);
               if (!trait) return null;
@@ -196,7 +181,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1">
                     {trait.champions
-                      .filter((k) => k.toLowerCase() !== c.key)
+                      .filter((k) => k !== c.key)
                       .slice(0, 10)
                       .map((k) => (
                         <ChampionIcon key={k} id={k} size="xs" link={false} />

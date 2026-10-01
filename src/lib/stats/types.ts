@@ -86,6 +86,8 @@ export interface ExplorerResult {
   comps: CompRow[];
   /** Items held by each champion the filters ask for (champion key → rows). */
   held?: Record<string, StatRow[]>;
+  /** Champions holding each item the filters ask for (item key → rows). */
+  holders?: Record<string, StatRow[]>;
   meta: DatasetMeta;
 }
 
@@ -103,3 +105,15 @@ export interface DatasetMeta {
 }
 
 export const ALL = 'all';
+
+/** A champion at one star level that places well above others of its cost and star level. */
+export interface TopUnit {
+  id: string;
+  star: number;
+  n: number;
+  avg: number;
+  top4: number;
+  win: number;
+  /** Average place of the other champions with the same cost and star level. */
+  peerAvg: number;
+}

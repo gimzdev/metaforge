@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { randomState, STATE_COOKIE } from '@/lib/auth/session';
+import { randomState, STATE_COOKIE } from '@/lib/auth';
 import { env } from '@/lib/env';
 
 export const dynamic = 'force-dynamic';

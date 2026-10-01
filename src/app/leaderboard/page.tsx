@@ -1,16 +1,15 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Suspense } from 'react';
-import { Flame, KeyRound, TriangleAlert } from 'lucide-react';
-import { RegionSelect } from '@/components/player/region-select';
-import { PageHeader, Skeleton } from '@/components/ui/primitives';
-import { brand } from '@/lib/brand';
+import { Flame, KeyRound, TriangleAlert } from '@/components/icons';
+import { RegionSelect } from '@/components/player/player-search';
+import { PageHeader, Skeleton } from '@/components/ui';
 import { env } from '@/lib/env';
-import { getLeaderboard } from '@/lib/players';
-import { rankLabel, tierColor } from '@/lib/ranks';
-import { RiotError } from '@/lib/riot/client';
+import { getLeaderboard, rankLabel, tierColor } from '@/lib/players';
+import { RiotError } from '@/lib/riot/api';
 import { getPlatform, normalizePlatform, platformLabel } from '@/lib/riot/regions';
 import { param, type SearchParams } from '@/lib/search-params';
+import { brand } from '@/lib/site';
 import { fmt, riotIdToSlug } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
@@ -131,18 +130,9 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
   const sp = await searchParams;
   const region = param(sp, 'region');
   const platform = region?.toLowerCase() === 'all' ? 'all' : (getPlatform(normalizePlatform(region) ?? 'na1')?.id ?? 'na1');
-  const where = platform === 'all' ? 'every server' : (getPlatform(platform)?.name ?? platformLabel(platform));
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Ladder"
-        art={brand.fight}
-        description={
-          platform === 'all'
-            ? 'The top 100 players across every server, ranked by LP.'
-            : `The top 100 ranked players on ${where}.`
-        }
-      >
+      <PageHeader title="Ladder" art={brand.fight}>
         <RegionSelect value={platform} allowAll />
       </PageHeader>
       {env.riotApiKey ? (

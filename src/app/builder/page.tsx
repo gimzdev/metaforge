@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { BuilderApp } from '@/components/builder/builder-app';
+import { BuilderApp } from '@/components/builder/builder';
 import { param, type SearchParams } from '@/lib/search-params';
 
 export const dynamic = 'force-dynamic';

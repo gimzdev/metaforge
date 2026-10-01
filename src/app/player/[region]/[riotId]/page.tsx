@@ -1,18 +1,15 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { Flame, KeyRound, SearchX, TriangleAlert } from 'lucide-react';
+import { Flame, KeyRound, SearchX, TriangleAlert } from '@/components/icons';
 import { GameImage } from '@/components/game/game-image';
 import { MatchHistory } from '@/components/player/match-history';
-import { PlayerSearch } from '@/components/player/player-search';
-import { RememberPlayer } from '@/components/player/remember-player';
+import { PlayerSearch, RememberPlayer } from '@/components/player/player-search';
 import { configuredSetNumber } from '@/config/game';
-import { getSession } from '@/lib/auth/session';
+import { getSession } from '@/lib/auth';
 import { env } from '@/lib/env';
-import { lookupPlayer, type PlayerProfile } from '@/lib/players';
-import { profileIconUrl, queueTypeLabel, rankLabel, tierColor } from '@/lib/ranks';
-import { RiotError } from '@/lib/riot/client';
+import { lookupPlayer, profileIconUrl, rankLabel, tierColor, type PlayerProfile } from '@/lib/players';
+import { RiotError, type LeagueEntryDto } from '@/lib/riot/api';
 import { getPlatform, normalizePlatform } from '@/lib/riot/regions';
-import type { LeagueEntryDto } from '@/lib/riot/types';
 import { cn, fmt, riotIdToSlug, safeDecode, slugToRiotId } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
@@ -25,29 +22,39 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   return { title: id ? `${id.gameName}#${id.tagLine}` : 'Player' };
 }
 
-function RankCard({ entry }: { entry: LeagueEntryDto }) {
-  const hyper = Boolean(entry.ratedTier);
-  const tier = hyper ? entry.ratedTier : entry.tier;
-  const games = entry.wins + entry.losses;
+function RankRow({ label, entry }: { label: string; entry?: LeagueEntryDto }) {
+  const hyper = Boolean(entry?.ratedTier);
+  const tier = entry ? (hyper ? entry.ratedTier : entry.tier) : null;
+  const name = !entry || !tier ? null : hyper ? `${tier.charAt(0)}${tier.slice(1).toLowerCase()}` : rankLabel(entry.tier, entry.rank);
   return (
-    <div className="surface relative overflow-hidden rounded-xl p-4">
-      <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: tierColor(tier) }} aria-hidden />
-      <div className="text-xs text-lichen">{queueTypeLabel(entry.queueType)}</div>
-      <div className="mt-1 font-display text-xl font-semibold" style={{ color: tierColor(tier) }}>
-        {hyper ? `${(tier ?? '').charAt(0)}${(tier ?? '').slice(1).toLowerCase()}` : rankLabel(entry.tier, entry.rank)}
-      </div>
-      <div className="num mt-0.5 text-sm text-moon">
-        {hyper ? `${fmt.int(entry.ratedRating ?? 0)} rating` : `${fmt.int(entry.leaguePoints ?? 0)} LP`}
-        {entry.hotStreak && <Flame className="ml-1.5 inline size-4 text-firefly" aria-label="Hot streak" />}
-      </div>
-      {!hyper && games > 0 && (
-        <div className="num mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-lichen">
-          <span>{fmt.int(games)} games</span>
-          <span title="Riot counts a top 4 finish as a win in ranked TFT">{fmt.int(entry.wins)} top 4s</span>
-          <span>{fmt.pct(entry.wins / games, 1)} top 4 rate</span>
-        </div>
-      )}
+    <div className="flex items-baseline justify-between gap-3 py-2">
+      <dt className="text-sm text-lichen">{label}</dt>
+      <dd className="flex items-baseline gap-2 text-right">
+        {entry && name ? (
+          <>
+            <span className="font-semibold" style={{ color: tierColor(tier) }}>
+              {name}
+            </span>
+            <span className="num text-sm text-lichen">{hyper ? `${fmt.int(entry.ratedRating ?? 0)} rating` : `${fmt.int(entry.leaguePoints ?? 0)} LP`}</span>
+            {entry.hotStreak && <Flame className="size-3.5 self-center text-firefly" aria-label="Hot streak" />}
+          </>
+        ) : (
+          <span className="text-sm text-fog">Unranked</span>
+        )}
+      </dd>
     </div>
+  );
+}
+
+/** The ranked queues of one set. */
+function RankList({ entries }: { entries: LeagueEntryDto[] }) {
+  const queue = (...types: string[]) => entries.find((r) => types.includes(r.queueType));
+  return (
+    <dl className="divide-y divide-line">
+      <RankRow label="Ranked" entry={queue('RANKED_TFT')} />
+      <RankRow label="Hyper Roll" entry={queue('RANKED_TFT_TURBO')} />
+      <RankRow label="Double Up" entry={queue('RANKED_TFT_DOUBLE_UP', 'RANKED_TFT_PAIRS')} />
+    </dl>
   );
 }
 
@@ -109,60 +116,45 @@ export default async function PlayerPage({ params }: { params: Params }) {
   const session = await getSession();
   const isMe = session?.puuid === profile.puuid;
   const icon = profileIconUrl(profile.profileIconId);
-  const ranked = [...profile.ranked].sort((a, b) => (a.queueType === 'RANKED_TFT' ? -1 : b.queueType === 'RANKED_TFT' ? 1 : 0));
+  const main = profile.ranked.find((r) => r.queueType === 'RANKED_TFT');
+  const totals = main && main.wins + main.losses > 0 ? { games: main.wins + main.losses, top4: main.wins / (main.wins + main.losses) } : null;
+  const current = configuredSetNumber();
 
   return (
     <div className="space-y-8">
       <RememberPlayer gameName={profile.gameName} tagLine={profile.tagLine} platform={profile.platform} />
-      <section className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-        <div className="flex items-center gap-5">
-          <div className="relative">
-            <GameImage src={icon} alt="" className="size-20 rounded-xl ring-2 ring-wisp/30 sm:size-24" eager />
-            {profile.summonerLevel !== null && (
-              <span className="num absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-night px-2 py-0.5 text-[11px] font-semibold text-lichen ring-1 ring-lichen/20">
-                {profile.summonerLevel}
-              </span>
-            )}
-          </div>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 text-sm text-lichen">
-              <span className="rounded-full bg-bark px-2.5 py-0.5 text-xs font-semibold text-moon">
-                {getPlatform(profile.platform)?.label ?? profile.platform.toUpperCase()}
-              </span>
-              {isMe && <span className="rounded-full bg-wisp/15 px-2.5 py-0.5 text-xs font-semibold text-wisp">You</span>}
-              {isMe && (
-                <form action="/api/auth/logout" method="post">
-                  <button type="submit" className="text-xs font-medium text-lichen underline-offset-4 hover:text-bloom hover:underline">
-                    Sign out
-                  </button>
-                </form>
+      <MatchHistory
+        key={`${profile.puuid}|${profile.platform}`}
+        puuid={profile.puuid}
+        platform={profile.platform}
+        setNumber={current}
+        totals={totals}
+        identity={
+          <div className="flex min-w-0 items-center gap-4 sm:gap-5">
+            <div className="relative shrink-0">
+              <GameImage src={icon} alt="" className="size-16 rounded-xl ring-2 ring-wisp/30" eager />
+              {profile.summonerLevel !== null && (
+                <span className="num absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-night px-2 py-0.5 text-[11px] font-semibold text-lichen ring-1 ring-lichen/20">
+                  {profile.summonerLevel}
+                </span>
               )}
             </div>
-            <h1 className="mt-1.5 truncate text-3xl font-semibold tracking-tight sm:text-4xl">
-              {profile.gameName}
-              <span className="text-fog">#{profile.tagLine}</span>
-            </h1>
+            <div className="min-w-0">
+              <h1 className="truncate text-2xl font-semibold tracking-tight">
+                {profile.gameName}
+                <span className="text-fog">#{profile.tagLine}</span>
+              </h1>
+              <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-bark px-2.5 py-0.5 text-xs font-semibold text-moon">
+                  {getPlatform(profile.platform)?.label ?? profile.platform.toUpperCase()}
+                </span>
+                {isMe && <span className="rounded-full bg-wisp/15 px-2.5 py-0.5 text-xs font-semibold text-wisp">You</span>}
+              </div>
+            </div>
           </div>
-        </div>
-        <PlayerSearch className="w-full lg:w-[420px]" />
-      </section>
-
-      {ranked.length > 0 ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {ranked.map((e) => (
-            <RankCard key={e.queueType} entry={e} />
-          ))}
-        </div>
-      ) : (
-        <div className="rounded-xl border border-dashed border-line-strong px-5 py-4 text-sm text-lichen">
-          Unranked this set.
-        </div>
-      )}
-
-      <section className="space-y-3">
-        <h2 className="text-xl font-semibold tracking-tight">Recent games</h2>
-        <MatchHistory puuid={profile.puuid} platform={profile.platform} setNumber={configuredSetNumber()} />
-      </section>
+        }
+        ranks={<RankList entries={profile.ranked} />}
+      />
     </div>
   );
 }

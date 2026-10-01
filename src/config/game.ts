@@ -6,7 +6,7 @@
  * itself is pulled live from CommunityDragon and never needs manual updates.
  */
 
-export interface PatchWindow {
+interface PatchWindow {
   /** Label players know the patch by, e.g. "18.3b". */
   label: string;
   /** UTC date the patch reached live servers (YYYY-MM-DD). */
@@ -15,7 +15,7 @@ export interface PatchWindow {
   tentative?: boolean;
 }
 
-export interface SetInfo {
+interface SetInfo {
   number: number;
   name: string;
   /** Riot's internal core name used in match data (tft_set_core_name). */
@@ -26,7 +26,7 @@ export interface SetInfo {
   patches: PatchWindow[];
 }
 
-export const SETS: Record<number, SetInfo> = {
+const SETS: Record<number, SetInfo> = {
   18: {
     number: 18,
     name: 'Enchanted Wilds',
@@ -51,7 +51,7 @@ export const SETS: Record<number, SetInfo> = {
 };
 
 /** The set MetaForge targets. Override with TFT_SET=<number> if CDragon moves ahead. */
-export const DEFAULT_SET = 18;
+const DEFAULT_SET = 18;
 
 /**
  * Board-building rules for the current set, used by the team builder. Trait
@@ -130,11 +130,3 @@ export function currentPatch(setNumber: number, now = Date.now()): ResolvedPatch
   return windows.length ? windows[windows.length - 1] : null;
 }
 
-export function nextPatch(setNumber: number, now = Date.now()): PatchWindow | null {
-  const info = getSetInfo(setNumber);
-  return (
-    info.patches
-      .filter((p) => Date.parse(`${p.start}T00:00:00Z`) > now)
-      .sort((a, b) => a.start.localeCompare(b.start))[0] ?? null
-  );
-}

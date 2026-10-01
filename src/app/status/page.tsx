@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
-import { CheckCircle2, CircleAlert, CircleDashed } from 'lucide-react';
+import { CheckCircle2, CircleAlert, CircleDashed } from '@/components/icons';
 import type { ReactNode } from 'react';
-import { RefreshButton } from '@/components/status/refresh-button';
-import { PageHeader, Panel } from '@/components/ui/primitives';
+import { PageHeader, Panel } from '@/components/ui';
+import { RefreshButton } from '@/components/ui-client';
 import { configuredSetNumber, getSetInfo } from '@/config/game';
 import { env } from '@/lib/env';
 import { platformLabel } from '@/lib/riot/regions';
@@ -31,7 +31,7 @@ function Row({ tone, label, value, hint }: { tone: Tone; label: string; value: R
 }
 
 export default async function StatusPage() {
-  const s = await getStatus();
+  const s = await getStatus(true);
   const info = getSetInfo(configuredSetNumber());
   const keyRejected = Boolean(s.keyRejectedAt && Date.now() - s.keyRejectedAt < 6 * 60 * 60_000);
 

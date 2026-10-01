@@ -1,4 +1,4 @@
-import { Skeleton } from '@/components/ui/primitives';
+import { Skeleton } from '@/components/ui';
 
 /** Shown while Riot answers the account, rank and match lookups. */
 export default function LoadingPlayer() {

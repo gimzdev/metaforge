@@ -1,14 +1,13 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { LogIn, TriangleAlert } from 'lucide-react';
+import { LogIn, TriangleAlert } from '@/components/icons';
 import { PlayerSearch } from '@/components/player/player-search';
-import { buttonClass } from '@/components/ui/button';
-import { PageHeader } from '@/components/ui/primitives';
-import { getSession } from '@/lib/auth/session';
-import { brand } from '@/lib/brand';
+import { buttonClass, PageHeader } from '@/components/ui';
+import { getSession } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { getActivePlatform } from '@/lib/riot/api';
 import { param, type SearchParams } from '@/lib/search-params';
+import { brand } from '@/lib/site';
 import { riotIdToSlug } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';

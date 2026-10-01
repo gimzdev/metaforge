@@ -1,4 +1,4 @@
-/** Persistence contract for collected matches. Implemented by Postgres and a local file store. */
+/** Persistence contract for collected matches, implemented by Postgres and local files. */
 
 /** One player's final board. Units: [characterId, star, items]; traits: [name, numUnits, style, tier]. */
 export interface BoardRecord {
@@ -44,11 +44,22 @@ export interface StoreStats {
   lastMatchAt: number | null;
 }
 
-export interface BoardQuery {
+export interface MatchQuery {
   setNumber: number;
   queueId: number;
   since: number;
   limit: number;
+  /** Cursor from an earlier read: only matches stored after it. */
+  after: string | null;
+  /** How many matches in range the caller holds from earlier reads: a store that finds fewer reads everything again. */
+  known?: number;
+}
+
+export interface StoredMatch {
+  matchId: string;
+  platform: string;
+  datetime: number;
+  boards: BoardRecord[];
 }
 
 export interface Store {
@@ -58,10 +69,11 @@ export interface Store {
   knownMatchIds(ids: string[]): Promise<Set<string>>;
   saveMatch(match: MatchRecord, boards: BoardRecord[]): Promise<void>;
   /**
-   * Stream the newest boards matching the query (up to query.limit) without
-   * holding them all in memory. Resolves with the number of boards delivered.
+   * Stream stored matches with their boards (the newest, up to about query.limit boards; in no set order).
+   * Resolves with a cursor for the next incremental read; `full` is false when only
+   * matches stored after query.after were read.
    */
-  forEachBoard(query: BoardQuery, onBoard: (board: BoardRecord) => void): Promise<number>;
+  readMatches(query: MatchQuery, onMatch: (match: StoredMatch) => void): Promise<{ cursor: string; full: boolean }>;
   /** Cheap token that changes whenever matches are added or removed. */
   changeToken(setNumber: number): Promise<string>;
   /** Delete matches played before the given time. Resolves with the number removed. */
@@ -70,9 +82,15 @@ export interface Store {
   getPlayers(puuids: string[]): Promise<Map<string, PlayerRecord>>;
   getKv<T>(key: string): Promise<T | null>;
   setKv(key: string, value: unknown): Promise<void>;
+  /** Delete key-value entries whose key starts with `prefix` and that were last written before `before` (epoch ms). */
+  pruneKv(prefix: string, before: number): Promise<number>;
+  /** Binary cache entries (the compact board snapshot). */
+  getBlob(key: string): Promise<Buffer | null>;
+  setBlob(key: string, value: Buffer): Promise<void>;
   stats(setNumber: number): Promise<StoreStats>;
 }
 
+/** Merge repeated players, keeping the newest non-empty value of each field. */
 export function dedupePlayers(players: PlayerRecord[]): PlayerRecord[] {
   const merged = new Map<string, PlayerRecord>();
   for (const p of players) {

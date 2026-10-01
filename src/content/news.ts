@@ -417,7 +417,7 @@ export const SET_OVERVIEW = {
   },
 };
 
-export interface EsportsEvent {
+interface EsportsEvent {
   name: string;
   dates: string;
   /** Last day of the event (UTC), to mark finished events */
@@ -446,7 +446,3 @@ export const OFFICIAL_LINKS = [
   { label: 'Unreal Engine migration FAQ', url: 'https://teamfighttactics.leagueoflegends.com/en-us/news/game-updates/faq-tft-unreal-migration/' },
   { label: 'Esports calendar', url: ESPORTS_SOURCE.url },
 ];
-
-export function latestPatchNote(): PatchNote {
-  return PATCH_NOTES[0];
-}

@@ -1,19 +1,16 @@
 import '@fontsource-variable/onest';
 import '@fontsource-variable/fraunces/standard.css';
-import '@fontsource-variable/fraunces/standard-italic.css';
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { currentPatch } from '@/config/game';
-import { Wordmark } from '@/components/layout/logo';
-import { SiteBackdrop } from '@/components/layout/site-backdrop';
-import { SiteFooter } from '@/components/layout/site-footer';
-import { SiteHeader } from '@/components/layout/site-header';
+import { SiteFooter } from '@/components/footer';
+import { Wordmark } from '@/components/logo';
 import { Providers } from '@/components/providers';
-import { getSession } from '@/lib/auth/session';
-import { tryGetStaticData } from '@/lib/cdragon';
-import { brand } from '@/lib/brand';
+import { SiteBackdrop, SiteHeader } from '@/components/site-header';
+import { getSession } from '@/lib/auth';
 import { env } from '@/lib/env';
+import { brand } from '@/lib/site';
+import { liteStatic, staticTextVersion, tryGetStaticData } from '@/lib/static/load';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,24 +23,32 @@ export const metadata: Metadata = {
   icons: { icon: brand.logo || '/icon.svg', apple: brand.logo || undefined },
 };
 
-export const viewport: Viewport = {
-  themeColor: '#0f0d0b',
-  colorScheme: 'dark',
-};
+export const viewport: Viewport = { themeColor: '#0f0d0b', colorScheme: 'dark' };
+
+/**
+ * Runs before any image loads. A picture the image optimizer fails to deliver (an outage, a plan's
+ * limit) quietly loads its original instead, unseen by the page's own handlers; game art that
+ * still fails shows its monogram (see GameImage).
+ */
+const IMAGE_FALLBACK = `(function(){function f(e,b){var t=e.target;if(!t||t.tagName!=='IMG')return;var m=b&&/^\\/_next\\/image\\?url=([^&]+)/.exec(t.getAttribute('src')||'');if(m){t.removeAttribute('srcset');t.src=decodeURIComponent(m[1]);e.stopPropagation();return}var p=t.parentNode;if(p&&p.classList&&p.classList.contains('gi')){if(b)p.setAttribute('data-broken','');else p.removeAttribute('data-broken')}}addEventListener('error',function(e){f(e,1)},true);addEventListener('load',function(e){f(e,0)},true)})()`;
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const [{ data, error }, session] = await Promise.all([tryGetStaticData(), getSession()]);
   return (
     <html lang="en">
+      <head>
+        {/* Nearly every page shows game art from CommunityDragon: open the connection before the first picture asks. */}
+        <link rel="preconnect" href="https://raw.communitydragon.org" />
+        <script dangerouslySetInnerHTML={{ __html: IMAGE_FALLBACK }} />
+      </head>
       <body className="min-h-dvh">
         <SiteBackdrop />
         {data ? (
           <Providers
-            staticData={data}
+            staticData={liteStatic(data)}
+            version={staticTextVersion(data)}
             session={session ? { puuid: session.puuid, gameName: session.gameName, tagLine: session.tagLine } : null}
             rsoEnabled={env.rsoEnabled}
-            riotConfigured={Boolean(env.riotApiKey)}
-            currentPatch={currentPatch(data.set.number)?.label ?? null}
           >
             <SiteHeader />
             <main className="mx-auto min-h-[70vh] max-w-[1400px] px-4 pb-10 pt-10 sm:px-6">{children}</main>
@@ -54,8 +59,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             <Wordmark size="lg" className="mx-auto" />
             <h1 className="mt-8 text-3xl">Game data is unreachable</h1>
             <p className="mt-3 text-[15px] leading-relaxed text-lichen">
-              MetaForge loads champions, traits and items from CommunityDragon on startup and could not reach it. Check
-              that this server has internet access, then reload.
+              MetaForge loads champions, traits and items from CommunityDragon on startup and could not reach it. Check that this
+              server has internet access, then reload.
             </p>
             <pre className="mt-5 overflow-x-auto rounded-lg border border-line bg-canopy p-3 text-left text-xs text-fog">{error}</pre>
             <a href="" className="mx-auto mt-6 inline-flex h-10 items-center rounded-lg bg-wisp px-5 text-sm font-semibold text-[#1b1306]">

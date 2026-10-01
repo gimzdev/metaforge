@@ -1,23 +1,17 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { FlaskConical } from 'lucide-react';
-import { CompRowCard } from '@/components/comps/comp-row';
+import { FlaskConical } from '@/components/icons';
 import { TraitHex } from '@/components/game/entities';
-import { styleFor } from '@/lib/trait-style';
 import { GameImage } from '@/components/game/game-image';
 import { RichText } from '@/components/game/rich-text';
-import { DetailHero } from '@/components/layout/detail-hero';
-import { AvgPlace } from '@/components/stats/bits';
-import { EntityTable } from '@/components/stats/entity-table';
+import { AvgPlace, CompRowCard, SummaryTiles } from '@/components/stats/bits';
 import { NoStatsNotice } from '@/components/stats/no-data';
-import { ScopeBar } from '@/components/stats/scope-bar';
-import { SummaryTiles } from '@/components/stats/summary-tiles';
-import { ButtonLink } from '@/components/ui/button';
-import { Panel } from '@/components/ui/primitives';
-import { getStaticData } from '@/lib/cdragon';
+import { EntityTable, ScopeBar } from '@/components/stats/table';
+import { ButtonLink, DetailHero, Panel } from '@/components/ui';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
-import { costColor, indexStatic } from '@/lib/static-index';
+import { costColor, indexStatic, styleFor, traitKindLabel } from '@/lib/static';
+import { getStaticData } from '@/lib/static/load';
 import { encodeFilters } from '@/lib/stats/filters';
 import { getTraitStats } from '@/lib/stats/service';
 import { cn, fmt } from '@/lib/utils';
@@ -38,8 +32,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 
 export default async function TraitPage({ params, searchParams }: { params: Params; searchParams: SearchParams }) {
   const [{ slug }, sp] = await Promise.all([params, searchParams]);
-  const data = await getStaticData();
-  const index = indexStatic(data);
+  const index = indexStatic(await getStaticData());
   const trait = index.trait(slug);
   if (!trait) notFound();
 
@@ -60,7 +53,7 @@ export default async function TraitPage({ params, searchParams }: { params: Para
     <div className="space-y-8">
       <DetailHero
         icon={<TraitHex trait={trait} style={styleFor(trait, trait.effects.length)} px={96} />}
-        kicker={<span className="capitalize">{trait.kind === 'trait' ? 'Synergy' : trait.kind}</span>}
+        kicker={<span className="capitalize">{traitKindLabel(trait)}</span>}
         title={trait.name}
         aside={
           <>
@@ -88,10 +81,7 @@ export default async function TraitPage({ params, searchParams }: { params: Para
               const row = tierStats.get(i + 1);
               return (
                 <li key={e.minUnits} className="flex gap-4 border-t hairline px-4 py-4 first:border-t-0 sm:px-5">
-                  <span
-                    className="num grid size-10 shrink-0 place-items-center rounded-lg bg-bark text-base font-semibold"
-                    style={{ color: `var(--color-style-${e.style})` }}
-                  >
+                  <span className="num grid size-10 shrink-0 place-items-center rounded-lg bg-bark text-base font-semibold" style={{ color: `var(--color-style-${e.style})` }}>
                     {e.minUnits}
                   </span>
                   <div className="min-w-0 flex-1 text-sm text-lichen">
@@ -100,9 +90,7 @@ export default async function TraitPage({ params, searchParams }: { params: Para
                   {row && (
                     <div className="shrink-0 text-right">
                       <AvgPlace value={row.avg} className="text-base" />
-                      <div className="num text-[11px] text-fog">
-                        {fmt.pct(stats.total ? row.n / stats.total : 0, 1)} of boards
-                      </div>
+                      <div className="num text-[11px] text-fog">{fmt.pct(stats.total ? row.n / stats.total : 0, 1)} of boards</div>
                     </div>
                   )}
                 </li>
@@ -111,17 +99,13 @@ export default async function TraitPage({ params, searchParams }: { params: Para
           </ul>
         </Panel>
 
-        <Panel title="Champions" bodyClassName="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <Panel title="Champions" bodyClassName="p-4 sm:p-5 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {members.map((c) => {
             const row = unitStats.get(c.key);
             return (
-              <Link
-                key={c.id}
-                href={`/units/${c.slug}`}
-                className="flex items-center gap-2.5 rounded-xl p-2 transition hover:bg-white/[0.04]"
-              >
+              <Link key={c.key} href={`/units/${c.slug}`} className="flex items-center gap-2.5 rounded-xl p-2 transition hover:bg-white/[0.04]">
                 <span className="rounded-lg p-[2px]" style={{ background: costColor(c.cost) }}>
-                  <GameImage src={c.icon} alt={c.name} className="size-10 rounded-[7px]" />
+                  <GameImage src={c.icon} alt={c.name} px={40} className="size-10 rounded-[7px]" />
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium">{c.name}</span>

@@ -1,63 +1,78 @@
 'use client';
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Tooltip } from 'radix-ui';
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
-import { indexStatic, type StaticIndex } from '@/lib/static-index';
-import type { StaticData } from '@/types/static';
+import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { HoverCards } from '@/components/game/hover';
+import { setPageStatic } from '@/lib/static';
+import type { StaticLite, StaticText } from '@/lib/static/types';
 
 interface AppContext {
-  index: StaticIndex;
   session: { gameName: string; tagLine: string; puuid: string } | null;
   rsoEnabled: boolean;
-  riotConfigured: boolean;
-  currentPatch: string | null;
 }
 
-const Ctx = createContext<AppContext | null>(null);
+const Ctx = createContext<AppContext>({ session: null, rsoEnabled: false });
+export const useApp = () => useContext(Ctx);
+
+/*
+ * Descriptions (abilities, items, traits, augments) come from /api/static/<version>, fetched once
+ * per version of the game data (a new version, after a refresh, loads again).
+ */
+let textVersion = '';
+let text: StaticText | null = null;
+let textFor = '';
+let loadingFor = '';
+const listeners = new Set<() => void>();
+
+function loadStaticText() {
+  const version = textVersion;
+  if (!version || textFor === version || loadingFor === version) return;
+  loadingFor = version;
+  fetch(`/api/static/${version}`)
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+    .then((json: StaticText) => {
+      text = json;
+      textFor = version;
+      for (const l of listeners) l();
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (loadingFor === version) loadingFor = ''; // after a failure, try again next time
+    });
+}
+
+/** The descriptions once loaded (null until then; always null on the server render). */
+export function useStaticText(): StaticText | null {
+  const value = useSyncExternalStore(
+    (l) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+    () => text,
+    () => null,
+  );
+  useEffect(() => loadStaticText(), []);
+  return value;
+}
 
 export function Providers({
   staticData,
-  session,
-  rsoEnabled,
-  riotConfigured,
-  currentPatch,
+  version,
   children,
-}: {
-  staticData: StaticData;
-  session: AppContext['session'];
-  rsoEnabled: boolean;
-  riotConfigured: boolean;
-  currentPatch: string | null;
-  children: ReactNode;
-}) {
-  const [client] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: { queries: { staleTime: 60_000, refetchOnWindowFocus: false, retry: 1 } },
-      }),
-  );
-  const value = useMemo(
-    () => ({ index: indexStatic(staticData), session, rsoEnabled, riotConfigured, currentPatch }),
-    [staticData, session, rsoEnabled, riotConfigured, currentPatch],
-  );
+  ...app
+}: AppContext & { staticData: StaticLite; version: string; children: ReactNode }) {
+  // Set during render, so every client component below (on the server too) can look game data up.
+  setPageStatic(staticData);
+  textVersion = version;
+  useEffect(() => {
+    // Warm the descriptions once the page is idle, so hover cards open with them.
+    const idle = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 1500));
+    idle(loadStaticText);
+  }, [version]);
+  const value = useMemo(() => app, [app.session, app.rsoEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <QueryClientProvider client={client}>
-      <Ctx.Provider value={value}>
-        <Tooltip.Provider delayDuration={150} skipDelayDuration={300}>
-          {children}
-        </Tooltip.Provider>
-      </Ctx.Provider>
-    </QueryClientProvider>
+    <Ctx.Provider value={value}>
+      {children}
+      <HoverCards />
+    </Ctx.Provider>
   );
-}
-
-export function useApp(): AppContext {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error('useApp must be used inside <Providers>');
-  return ctx;
-}
-
-export function useStatic(): StaticIndex {
-  return useApp().index;
 }

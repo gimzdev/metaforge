@@ -1,23 +1,20 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { FlaskConical } from 'lucide-react';
+import { FlaskConical } from '@/components/icons';
 import { ItemIcon, TraitBadge } from '@/components/game/entities';
 import { GameImage } from '@/components/game/game-image';
 import { RichText } from '@/components/game/rich-text';
-import { DetailHero } from '@/components/layout/detail-hero';
-import { EntityTable } from '@/components/stats/entity-table';
+import { SummaryTiles } from '@/components/stats/bits';
 import { NoStatsNotice } from '@/components/stats/no-data';
-import { ScopeBar } from '@/components/stats/scope-bar';
-import { SummaryTiles } from '@/components/stats/summary-tiles';
-import { ButtonLink } from '@/components/ui/button';
-import { Panel } from '@/components/ui/primitives';
-import { getStaticData } from '@/lib/cdragon';
+import { EntityTable, ScopeBar } from '@/components/stats/table';
+import { ButtonLink, DetailHero, Panel } from '@/components/ui';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
-import { indexStatic } from '@/lib/static-index';
+import { indexStatic } from '@/lib/static';
+import { getStaticData } from '@/lib/static/load';
+import { ITEM_CATEGORY_LABEL } from '@/lib/static/types';
 import { encodeFilters } from '@/lib/stats/filters';
 import { getItemStats } from '@/lib/stats/service';
-import { ITEM_CATEGORY_LABEL } from '@/types/static';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,8 +33,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 export default async function ItemPage({ params, searchParams }: { params: Params; searchParams: SearchParams }) {
   const [{ slug }, sp] = await Promise.all([params, searchParams]);
   const data = await getStaticData();
-  const index = indexStatic(data);
-  const item = index.item(slug);
+  const item = indexStatic(data).item(slug);
   if (!item) notFound();
 
   const stats = await getItemStats(item.key, scopeFrom(sp));
@@ -50,13 +46,8 @@ export default async function ItemPage({ params, searchParams }: { params: Param
   const buildsInto =
     item.category === 'component'
       ? data.items
-          .filter((i) => i.composition.map((x) => x.toLowerCase()).includes(item.key) && i.composition.length === 2)
-          .map((i) => {
-            const comp = i.composition.map((x) => x.toLowerCase());
-            const at = comp.indexOf(item.key);
-            const other = comp[at === 0 ? 1 : 0];
-            return { result: i, other };
-          })
+          .filter((i) => i.composition.length === 2 && i.composition.includes(item.key))
+          .map((i) => ({ result: i, other: i.composition[i.composition.indexOf(item.key) === 0 ? 1 : 0] }))
           .sort((a, b) => a.result.name.localeCompare(b.result.name))
       : [];
 
@@ -118,10 +109,10 @@ export default async function ItemPage({ params, searchParams }: { params: Param
             )}
           </Panel>
           {buildsInto.length > 0 && (
-            <Panel title="Builds into" bodyClassName="p-2">
+            <Panel title="Builds into" bodyClassName="p-2 sm:p-5">
               <ul>
                 {buildsInto.map(({ result, other }) => (
-                  <li key={result.id}>
+                  <li key={result.key}>
                     <Link href={`/items/${result.slug}`} className="flex items-center gap-2 rounded-xl p-2 hover:bg-white/[0.04]">
                       <ItemIcon id={other} px={26} link={false} />
                       <span className="text-fog">=</span>

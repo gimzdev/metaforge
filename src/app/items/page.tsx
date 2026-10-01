@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { CollectionPage } from '@/components/home/collection-page';
+import { CollectionPage } from '@/components/home';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
 
 export const dynamic = 'force-dynamic';

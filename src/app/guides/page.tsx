@@ -1,15 +1,16 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Coins, Compass, Gauge, LayoutGrid, Shuffle, Swords } from 'lucide-react';
+import { Coins, Compass, Gauge, LayoutGrid, Shuffle, Swords } from '@/components/icons';
 import { ItemIcon } from '@/components/game/entities';
-import { Expandable } from '@/components/ui/expandable';
-import { PageHeader } from '@/components/ui/primitives';
+import { PageHeader } from '@/components/ui';
+import { Expandable } from '@/components/ui-client';
 import { SET_OVERVIEW } from '@/content/news';
-import { brand } from '@/lib/brand';
-import { getStaticData } from '@/lib/cdragon';
+import { brand } from '@/lib/site';
+import { getStaticData } from '@/lib/static/load';
+import type { Item } from '@/lib/static/types';
 import { getMeta } from '@/lib/stats/service';
+import { itemMinSample } from '@/lib/stats/tiers';
 import { cn, fmt, placementTone, toneText } from '@/lib/utils';
-import type { Item } from '@/types/static';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,16 +53,14 @@ const FUNDAMENTALS = [
   },
 ];
 
-function recipeKey(a: string, b: string) {
-  return [a.toLowerCase(), b.toLowerCase()].sort().join('+');
-}
+const recipeKey = (a: string, b: string) => [a, b].sort().join('+');
 
 export default async function GuidesPage() {
   const data = await getStaticData();
   const meta = await getMeta({}).catch(() => null);
   const itemAvg = new Map<string, number>();
   if (meta && meta.meta.total > 0) {
-    const minN = Math.max(5, Math.round(meta.minN * 0.6));
+    const minN = itemMinSample(meta.minN);
     for (const r of meta.items) if (r.n >= minN) itemAvg.set(r.id, r.avg);
   }
 
@@ -90,7 +89,7 @@ export default async function GuidesPage() {
   for (const item of data.items) {
     if (item.composition.length !== 2) continue;
     const [a, b] = item.composition;
-    if (!componentKeys.has(a.toLowerCase()) || !componentKeys.has(b.toLowerCase())) continue;
+    if (!componentKeys.has(a) || !componentKeys.has(b)) continue;
     if (item.category === 'completed' || item.category === 'emblem') {
       const key = recipeKey(a, b);
       // Prefer the completed item if an emblem shares the recipe.
@@ -103,22 +102,15 @@ export default async function GuidesPage() {
   const chartComponents = components.filter((c) => used.has(c.key));
   const emblems = data.items.filter((i) => i.category === 'emblem').sort((a, b) => a.name.localeCompare(b.name));
   const byKey = new Map(data.items.map((i) => [i.key, i]));
-  const special = (e: Item) => e.composition.map((c) => byKey.get(c.toLowerCase())?.name.toLowerCase() ?? c.toLowerCase());
+  const special = (e: Item) => e.composition.map((c) => byKey.get(c)?.name.toLowerCase() ?? c);
   const spatula = emblems.filter((e) => e.composition.length === 2 && special(e).some((n) => n.includes('spatula')));
-  const pan = emblems.filter(
-    (e) => e.composition.length === 2 && special(e).some((n) => n.includes('pan')) && !spatula.includes(e),
-  );
+  const pan = emblems.filter((e) => e.composition.length === 2 && special(e).some((n) => n.includes('pan')) && !spatula.includes(e));
   const otherEmblems = emblems.filter((e) => !spatula.includes(e) && !pan.includes(e));
-  const partner = (e: Item, base: string) =>
-    e.composition.find((c) => !(byKey.get(c.toLowerCase())?.name.toLowerCase() ?? '').includes(base)) ?? e.composition[1];
+  const partner = (e: Item, base: string) => e.composition.find((c) => !(byKey.get(c)?.name.toLowerCase() ?? '').includes(base)) ?? e.composition[1];
 
   return (
     <div className="space-y-12">
-      <PageHeader
-        title="Guides"
-        art={brand.learn}
-        description={`Every item recipe and how it is placing this patch, the Spatula and Frying Pan emblems, and the basics of ${data.set.name}.`}
-      />
+      <PageHeader title="Guides" art={brand.learn} />
 
       <Expandable
         id="fundamentals"
@@ -196,7 +188,7 @@ export default async function GuidesPage() {
                   <tr>
                     <th className="sticky left-0 z-10 size-[72px] bg-canopy" aria-label="Component" />
                     {chartComponents.map((c) => (
-                      <th key={c.id} className="size-[72px] border-l hairline bg-canopy text-center align-middle">
+                      <th key={c.key} className="size-[72px] border-l hairline bg-canopy text-center align-middle">
                         <span className="inline-flex">
                           <ItemIcon id={c.key} px={40} />
                         </span>
@@ -206,7 +198,7 @@ export default async function GuidesPage() {
                 </thead>
                 <tbody>
                   {chartComponents.map((row) => (
-                    <tr key={row.id} className="border-t hairline">
+                    <tr key={row.key} className="border-t hairline">
                       <th className="sticky left-0 z-10 size-[72px] bg-canopy text-center align-middle">
                         <span className="inline-flex">
                           <ItemIcon id={row.key} px={40} />
@@ -217,7 +209,7 @@ export default async function GuidesPage() {
                         const avg = item ? itemAvg.get(item.key) : undefined;
                         return (
                           <td
-                            key={col.id}
+                            key={col.key}
                             className={cn(
                               'size-[72px] border-l hairline text-center align-middle',
                               row.key === col.key && 'bg-white/[0.025]',
@@ -266,7 +258,7 @@ export default async function GuidesPage() {
                       {g.list.map((e) => {
                         const avg = itemAvg.get(e.key);
                         return (
-                          <li key={e.id} className="border-t hairline first:border-t-0">
+                          <li key={e.key} className="border-t hairline first:border-t-0">
                             <Link
                               href={`/items/${e.slug}`}
                               className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-white/[0.03]"
@@ -296,7 +288,7 @@ export default async function GuidesPage() {
                   {otherEmblems.map((e) => {
                     const avg = itemAvg.get(e.key);
                     return (
-                      <li key={e.id}>
+                      <li key={e.key}>
                         <Link
                           href={`/items/${e.slug}`}
                           className="flex items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-white/[0.03]"

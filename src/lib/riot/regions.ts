@@ -63,3 +63,8 @@ export function parseRegionList(raw: string): string[] {
     .filter((r): r is string => Boolean(r));
   return [...new Set(ids)];
 }
+
+/** "EUW1_7412345678" → "euw1" */
+export function platformFromMatchId(matchId: string, fallback = 'unknown'): string {
+  return normalizePlatform(matchId.split('_')[0]) ?? fallback;
+}

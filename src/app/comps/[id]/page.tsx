@@ -1,20 +1,15 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { FlaskConical, Hexagon } from 'lucide-react';
-import { CompName } from '@/components/comps/comp-name';
+import { FlaskConical, Hexagon } from '@/components/icons';
 import { ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
-import { DetailHero } from '@/components/layout/detail-hero';
-import { AvgPlace, GradeBadge } from '@/components/stats/bits';
-import { EntityTable } from '@/components/stats/entity-table';
-import { ScopeBar } from '@/components/stats/scope-bar';
-import { SummaryTiles } from '@/components/stats/summary-tiles';
-import { ButtonLink } from '@/components/ui/button';
-import { Panel } from '@/components/ui/primitives';
+import { AvgPlace, CompName, GradeBadge, SummaryTiles } from '@/components/stats/bits';
+import { EntityTable, ScopeBar } from '@/components/stats/table';
+import { ButtonLink, DetailHero, Panel } from '@/components/ui';
 import { autoPlace, encodeBoard } from '@/lib/builder';
-import { getStaticData } from '@/lib/cdragon';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
-import { indexStatic } from '@/lib/static-index';
+import { indexStatic, splashSources } from '@/lib/static';
+import { getStaticData } from '@/lib/static/load';
 import { encodeFilters } from '@/lib/stats/filters';
 import { getComp } from '@/lib/stats/service';
 import type { Filter } from '@/lib/stats/types';
@@ -56,13 +51,21 @@ export default async function CompPage({ params, searchParams }: { params: Param
   if (comp.carry) filters.push({ k: 'unit', id: comp.carry });
   const explorerHref = `/explorer?f=${encodeFilters(filters)}`;
   const carry = result.carry ? index.champion(result.carry) : undefined;
+  // Banner art: the carry's, then the art of the units built around items (most items first). Each one lists its
+  // own fallbacks, so a missing file for one champion moves on to the next candidate instead of leaving the banner bare.
+  const byWeight = [...comp.units].sort((a, b) => b.items.length - a.items.length || b.freq - a.freq);
+  const artOrder = [result.carry, ...byWeight.map((u) => u.id)].filter((k, i, all): k is string => Boolean(k) && all.indexOf(k) === i);
+  const backdrop = [
+    ...artOrder.slice(0, 4).flatMap((k) => splashSources(index.champion(k), { portraits: false })),
+    ...splashSources(index.champion(artOrder[0])), // last resort: the carry's small portraits
+  ];
   const summary = { boards: comp.n, total: 0, avg: comp.avg, top4: comp.top4, win: comp.win, placements: comp.placements };
 
   return (
     <div className="space-y-8">
       <DetailHero
-        backdrop={carry?.splash}
-        icon={<GradeBadge grade={comp.grade} className="size-16 rounded-xl text-3xl" />}
+        backdrop={backdrop}
+        icon={<GradeBadge grade={comp.grade} size="size-16 rounded-xl text-3xl" />}
         title={<CompName name={comp.name} />}
         aside={
           <>
@@ -89,10 +92,7 @@ export default async function CompPage({ params, searchParams }: { params: Param
 
       <SummaryTiles summary={summary} playRate={comp.freq} />
 
-      <Panel
-        title="Typical board"
-        aside={<span className="text-xs">Share of boards running each unit, average level {comp.level.toFixed(1)}</span>}
-      >
+      <Panel title="Typical board" aside={<span className="text-xs">Share of boards running each unit, average level {comp.level.toFixed(1)}</span>}>
         <div className="flex flex-wrap gap-x-4 gap-y-6">
           {comp.units.map((u) => (
             <div key={u.id} className="flex w-[74px] flex-col items-center gap-1.5">
@@ -121,14 +121,7 @@ export default async function CompPage({ params, searchParams }: { params: Param
             }
             flush
           >
-            <EntityTable
-              kind="item"
-              rows={result.carryItems}
-              minN={Math.max(3, Math.round(comp.n * 0.03))}
-              freqLabel="Held"
-              limit={10}
-              defaultSort="freq"
-            />
+            <EntityTable kind="item" rows={result.carryItems} minN={Math.max(3, Math.round(comp.n * 0.03))} freqLabel="Held" limit={10} defaultSort="freq" />
           </Panel>
         )}
         <div className="space-y-6">

@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
-import { MetaView } from '@/components/meta/meta-view';
+import { MetaView } from '@/components/meta-view';
 import { NoData } from '@/components/stats/no-data';
-import { PageHeader } from '@/components/ui/primitives';
+import { PageHeader } from '@/components/ui';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
-import { getMeta } from '@/lib/stats/service';
+import { getMeta, metaViewData } from '@/lib/stats/service';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,10 +17,10 @@ export default async function MetaPage({ searchParams }: { searchParams: SearchP
   if (!data.meta.total) {
     return (
       <>
-        <PageHeader title="Meta report" description="Comp, champion, item and trait tier lists from ranked games." />
+        <PageHeader title="Meta report" />
         <NoData error={data.meta.error} />
       </>
     );
   }
-  return <MetaView data={data} />;
+  return <MetaView data={metaViewData(data)} />;
 }

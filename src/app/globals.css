@@ -1,5 +1,18 @@
 @import 'tailwindcss';
 
+/* Laptop screens: wide enough for the desktop layout but short (the home masthead tightens up). */
+@custom-variant short (@media (min-width: 64rem) and (max-height: 56.25rem));
+
+/* Fraunces italic only draws the home page numerals and the 404: those glyphs, not the 80 KB font. */
+@font-face {
+  font-family: 'Fraunces Variable';
+  font-style: italic;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/fonts/fraunces-italic-numerals-1.woff2) format('woff2-variations');
+  unicode-range: U+2E, U+30-39, U+69, U+76, U+78;
+}
+
 @theme static {
   --font-sans: 'Onest Variable', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Fraunces Variable', ui-serif, Georgia, serif;
@@ -150,17 +163,8 @@
   border: 1px solid var(--color-line);
 }
 
-@utility surface-raised {
-  background-color: var(--color-grove);
-  border: 1px solid var(--color-line-strong);
-}
-
 @utility hairline {
   border-color: var(--color-line);
-}
-
-@utility text-balance {
-  text-wrap: balance;
 }
 
 /* Small uppercase label above titles and table heads. */
@@ -171,23 +175,35 @@
   text-transform: uppercase;
 }
 
-/* Kept for older markup: a quiet line grid instead of the old glowing hexes. */
-@utility hex-grid {
-  background-image:
-    linear-gradient(to right, rgb(241 233 216 / 0.035) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(241 233 216 / 0.035) 1px, transparent 1px);
-  background-size: 48px 48px;
-}
-
-/* Brand accent text (solid brass, no gradient). */
-@utility text-solar {
-  color: var(--color-wisp);
-}
-
 /* Film grain for the backdrop, so flat ink does not look plastic. */
 @utility grain {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-size: 180px 180px;
+}
+
+/* Game art without a picture (or whose picture failed): a monogram on bark. Utilities passed in still win. */
+@layer components {
+  .gi-empty,
+  .gi[data-broken] {
+    background-color: var(--color-bark);
+    color: var(--color-lichen);
+    font-family: var(--font-sans);
+    font-size: 0.62em;
+    font-weight: 600;
+    user-select: none;
+  }
+}
+.gi-empty,
+.gi[data-broken] {
+  display: grid;
+  place-items: center;
+}
+.gi-empty::after,
+.gi[data-broken]::after {
+  content: attr(data-initials);
+}
+.gi[data-broken] > img {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

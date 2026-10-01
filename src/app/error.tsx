@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from '@/components/icons';
 
 export default function ErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {

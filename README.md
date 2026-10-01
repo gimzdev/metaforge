@@ -1,121 +1,132 @@
+<div align="center">
+
 # MetaForge
 
-Teamfight Tactics meta, stats explorer, team builder and player lookup for **Set 18: Enchanted Wilds**, built from real
-Challenger, Grandmaster and Master ranked games.
+### Teamfight Tactics stats, comps and team builder
 
-- **Meta report**: comp tier list grouped by carries, each with its typical board and who holds the items, plus champion,
-  item and trait tier lists, standout picks and what moved since the previous patch.
-- **Stats explorer**: stack conditions on champions (star level, exact held items, item count), items (copies),
-  trait breakpoints (at least or exactly), augments and player level, include or exclude each one, and read how every
-  champion, item, trait, comp and level performs on exactly those boards. With a champion in the conditions, the Items
-  tab shows what that champion holds (or switch to items anywhere on the board). Every view is a shareable link.
-- **Team builder**: drag and drop hex board with items and emblems, live synergies that follow the set's rules (the
-  Avatar's doubled trait, one Avatar per board, the Elder Dragon's two slots and Riftbeast bonus), saved boards and share
-  links.
-- **Champion, item, trait and comp pages** with best items, full builds, star levels, holders, pairings and breakpoints.
-- **Player lookup and ladder**: Riot ID search, ranks, match history with full lobbies, and the top 100 per region.
-- **Patch notes** for 18.1 through 18.3b, sorted into buffs, nerfs and changes, with the patch calendar and the
-  competitive schedule.
+[![React](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org)
+[![Next.js](https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://typescriptlang.org)
+[![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
 
-## Run it
+---
 
-```bash
-bash v3.sh                # installs, builds and starts on http://localhost:3000
-bash v3.sh --dev          # development server with hot reload
-bash v3.sh --port 8080    # another port
-bash v3.sh --no-start     # install and build only
+## About
+
+MetaForge is a stats site for Teamfight Tactics **Set 18: Enchanted Wilds**. It collects the final boards of high-elo ranked games from the Riot API and turns them into tier lists, comps, item and trait stats, and a stats explorer you can slice by any combination of champions, items, traits and level.
+
+Everything on the site comes from real games: comps are grouped by their carries, grades account for small samples, and each champion is compared with others of its cost and star level.
+
+---
+
+## Data
+
+<table>
+<tr>
+<td align="center" width="50%">
+
+### Riot API
+Ranked match boards  
+15 regions, collected hourly
+
+</td>
+<td align="center" width="50%">
+
+### CommunityDragon
+Champions, traits, items  
+Loaded from the live game data
+
+</td>
+</tr>
+</table>
+
+---
+
+## Features
+
+<table>
+<tr>
+<td align="center">
+
+### Meta report
+Comp tier list with typical boards  
+Champion, item and trait tiers
+
+</td>
+<td align="center">
+
+### Stats explorer
+Stack conditions on units, items,  
+traits, augments and level
+
+</td>
+<td align="center">
+
+### Team builder
+Drag and drop hex board  
+Live synergies, share links
+
+</td>
+</tr>
+<tr>
+<td align="center">
+
+### Patch notes
+Buffs, nerfs and changes  
+per patch, with a timeline
+
+</td>
+<td align="center">
+
+### Ladder and players
+Top 100 per region  
+Riot ID lookup, match history
+
+</td>
+<td align="center">
+
+### Guides
+Item recipes with placements  
+Emblems and set mechanics
+
+</td>
+</tr>
+</table>
+
+---
+
+## Stack
+
+```javascript
+const tech = {
+  frontend: ["Next.js 16", "React 19", "TypeScript", "Tailwind CSS 4"],
+  backend: ["Next.js route handlers", "PostgreSQL (Neon) or local files"],
+  data: ["Riot API", "CommunityDragon"],
+  deploy: ["Vercel", "hourly cron for collection"]
+};
 ```
 
-Requires Node.js 20.9 or newer. The script keeps your `.env.local` and collected data when you run it again, so it is
-also the upgrade path.
+---
 
-Your Riot key and database URL can live in the settings block at the top of `v3.sh`, in `.env.local`, or come from
-the environment (the environment wins):
+## Setup
 
 ```bash
-RIOT_API_KEY=RGAPI-... DATABASE_URL=postgres://... bash v3.sh
+git clone https://github.com/gimzdev/metaforge.git
+cd metaforge
+npm install
+
+cp .env.example .env.local
+npm run dev
 ```
 
-## Configuration (`.env.local`)
+Set `RIOT_API_KEY` in `.env.local` to start collecting games, and `DATABASE_URL` for a Postgres database (without it, matches are stored in `.data/`). Riot development keys expire every 24 hours.
 
-| Variable | Purpose |
-| --- | --- |
-| `RIOT_API_KEY` | Riot API key from developer.riotgames.com. Needed for match collection, ladder and player lookups. Development keys expire every 24 hours. |
-| `DATABASE_URL` | Postgres connection string (Neon, Supabase, any Postgres). Without it, matches are stored in `./.data`. |
-| `APP_URL` | Public URL of the site, used for Riot Sign-On redirects and metadata. |
-| `CRON_SECRET`, `SESSION_SECRET` | Generated by the setup script. Protect the collection endpoint and sign sessions. |
-| `RIOT_CLIENT_ID`, `RIOT_CLIENT_SECRET`, `RIOT_REDIRECT_URI` | Optional Riot Sign-On client. The redirect defaults to `APP_URL/auth/callback`. |
-| `INGEST_REGIONS` | Platforms to sample, comma separated or `all`. Default `na1,euw1,kr,eun1`. |
-| `INGEST_INTERVAL_MINUTES` | Background collection interval while the server runs. `0` turns it off. Default 20. |
-| `INGEST_PLAYERS_PER_REGION`, `INGEST_MATCHES_PER_REGION` | Sample size per region per run. Defaults 10 and 40. |
-| `RETAIN_DAYS` | Stored matches older than this are deleted after each run. Default 30, `0` keeps everything. |
-| `RIOT_RATE_LIMITS` | Your key's limits as `requests:seconds` pairs. Default `20:1,100:120` (development key). |
-| `RIOT_API_BASE_URL` | Send Riot calls through a caching proxy. `{host}` becomes `na1`, `americas` and so on. |
-| `DATABASE_POOL_MAX` | Postgres connections per instance. Default 6, or 2 on Vercel. |
-| `MAX_BOARDS` | Boards loaded into the stats engine. Default 250,000. |
-| `TFT_SET` | Target a different set number once CommunityDragon has it. |
+To deploy on Vercel, add the same variables plus `CRON_SECRET`; `vercel.json` already schedules the hourly collection.
 
-## Your logo and artwork
+---
 
-`v3.sh` ships the original MetaForge artwork (the anvil logo, the Piltover skyline and the two banners) and writes it to
-`public/assets/app/`. To use different images, replace those files, or put your own in `public/assets/app/` next to the
-script, and run `bash v3.sh` again. They are picked up at build time.
+[![Live](https://img.shields.io/badge/Live-000000?style=for-the-badge&logo=rocket&logoColor=white)](https://metaforge.lol)
 
-| File | Used for |
-| --- | --- |
-| `app.png` (or `logo.png`, `.webp`, `.svg`) | Logo in the header and footer, and the browser tab icon |
-| `bg.jpg` (or `.jpeg`, `.png`, `.webp`) | Page background and the home page hero |
-| `fight_banner.jpg` | The ladder tile on the home page and the ladder header |
-| `learn_banner.jpg` | The guides tile on the home page, and the guides and profile headers |
+MetaForge isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
 
-`v3.sh` copies these files in for you from an old v1 install, from a `public/assets/app/` folder next to the script (the
-layout v1 used), or from any folder you name with `METAFORGE_ASSETS=/path/to/images bash v3.sh`.
-
-## How the data works
-
-Game data (champions, traits, items, augments, icons) is loaded from CommunityDragon on startup and cached for six
-hours in memory and in `.data/cache`. Match data comes only from the Riot API: every run samples top-ladder players per
-region, fetches their newest ranked games of the current set, and stores each final board. The stats engine loads the
-boards into typed arrays and answers explorer queries in milliseconds.
-
-Collection runs:
-
-- in the background every `INGEST_INTERVAL_MINUTES` while `npm start` or `npm run dev` is running,
-- on demand with `npm run ingest` (or `npm run ingest -- kr euw1`),
-- from a scheduler calling `/api/cron/ingest` with `Authorization: Bearer <CRON_SECRET>` (Vercel Cron uses
-  `vercel.json`).
-
-The Data status page (`/status`) shows what is stored and how the last run went.
-
-## Deploying
-
-**Vercel + Neon**: push this folder to GitHub and import it in Vercel. Add `DATABASE_URL`, `RIOT_API_KEY`,
-`CRON_SECRET`, `SESSION_SECRET` (copy them from `.env.local`) and `APP_URL` (your domain), then deploy. Tables are
-created automatically on first use (`npm run db:init` does it up front). `vercel.json` calls `/api/cron/ingest` every
-hour and Vercel signs those calls with `CRON_SECRET` automatically. Hobby plans only allow daily crons: set the schedule
-to `0 6 * * *` and have a free pinger such as cron-job.org open `https://your-domain/api/cron/ingest?secret=<CRON_SECRET>`
-every 30 to 60 minutes. Environment variable changes need a redeploy, so a personal API key from
-developer.riotgames.com (it does not expire) saves you a daily update.
-
-**Any Node host**: `npm ci && npm run build && npm start` behind your reverse proxy. Keep the server running for
-background collection, or point a scheduler at `/api/cron/ingest`.
-
-## Keeping it current
-
-- Patch dates and set rules live in `src/config/game.ts`.
-- Patch summaries live in `src/content/news.ts`, one line per change (target, buff or nerf, old and new values).
-- Champion, trait and item data updates itself from CommunityDragon.
-
-## Scripts
-
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Development server |
-| `npm run build` / `npm start` | Production build and server |
-| `npm run ingest` | One collection pass |
-| `npm run db:init` | Create the Postgres tables (safe to repeat) |
-| `npm run typecheck` | TypeScript check |
-
-MetaForge isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially
-involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or
-registered trademarks of Riot Games, Inc.
+</div>

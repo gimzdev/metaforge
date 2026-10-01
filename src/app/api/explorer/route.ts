@@ -1,32 +1,25 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { explore } from '@/lib/stats/service';
-import { sanitizeFilters } from '@/lib/stats/filters';
-import { clientKey, rateLimit } from '@/lib/rate-limit';
+import { failure, json, limited } from '@/lib/http';
 import { normalizePlatform } from '@/lib/riot/regions';
+import { sanitizeFilters } from '@/lib/stats/filters';
+import { explore } from '@/lib/stats/service';
 
 export const dynamic = 'force-dynamic';
 
-function cleanScope(body: Record<string, unknown>) {
-  const region = typeof body.region === 'string' && body.region !== 'all' ? normalizePlatform(body.region) ?? 'none' : 'all';
-  const patch = typeof body.patch === 'string' && /^[\w.]{1,12}$/.test(body.patch) ? body.patch : undefined;
-  return { region, patch };
-}
-
 export async function POST(req: NextRequest) {
-  const wait = rateLimit(`explorer:${clientKey(req)}`, 240, 60_000);
-  if (wait) {
-    return NextResponse.json({ error: 'Too many requests. Slow down a little.' }, { status: 429, headers: { 'Retry-After': String(wait) } });
-  }
+  const blocked = limited(req, 'explorer', 240, 'Too many requests. Slow down a little.');
+  if (blocked) return blocked;
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
+  const region = typeof body.region === 'string' && body.region !== 'all' ? (normalizePlatform(body.region) ?? 'none') : 'all';
+  const patch = typeof body.patch === 'string' && /^[\w.]{1,12}$/.test(body.patch) ? body.patch : undefined;
   try {
-    const result = await explore(cleanScope(body), sanitizeFilters(body.filters));
-    return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } });
+    return json(req, await explore({ region, patch }, sanitizeFilters(body.filters)), { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Explorer failed' }, { status: 500 });
+    return failure(error, 'Explorer failed');
   }
 }

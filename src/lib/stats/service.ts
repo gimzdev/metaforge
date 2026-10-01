@@ -5,17 +5,21 @@ import {
   aggregateComps,
   heldItems,
   clusterIndex,
+  itemHolders,
   itemInsight,
   resolveScope,
   scopeBoards,
   selectBoards,
   summarize,
   traitInsight,
+  unitForms,
   unitInsight,
 } from './engine';
 import { filterSignature } from './filters';
-import { gradeComps, gradeRows, highlights, minSample, type Highlight } from './tiers';
-import type { ExplorerResult, Filter, Scope, StatRow, Summary, TieredComp, TieredRow } from './types';
+import { indexStatic } from '@/lib/static';
+import { trimFloats } from '@/lib/utils';
+import { gradeComps, gradeRows, highlights, itemMinSample, minSample, topUnits, type Highlight } from './tiers';
+import type { ExplorerResult, Filter, Scope, StatRow, Summary, TieredComp, TieredRow, TopUnit } from './types';
 
 /** Cached, page-ready stats built on the engine. */
 
@@ -25,7 +29,7 @@ function memo<T>(ds: Dataset, key: string, build: () => T): T {
   const k = `${ds.version}:${ds.meta.builtAt}:${key}`;
   const hit = results().get(k);
   if (hit !== undefined) return hit as T;
-  const value = build();
+  const value = trimFloats(build());
   results().set(k, value);
   return value;
 }
@@ -40,11 +44,15 @@ export async function explore(scopeInput: Partial<Scope>, filters: Filter[]): Pr
     const summary = summarize(ds, boards, base.length);
     const rows = aggregate(ds, boards, summary.avg);
     const comps = aggregateComps(ds, boards, { minN: Math.max(4, Math.round(boards.length * 0.004)), limit: 30 });
+    // Items each champion in the filters holds, and the champions holding each item in them.
     const held: Record<string, StatRow[]> = {};
+    const holders: Record<string, StatRow[]> = {};
     for (const f of filters) {
-      if (f.k === 'unit' && !f.not && !held[f.id]) held[f.id] = heldItems(ds, boards, f.id, summary.avg);
+      if (f.not) continue;
+      if (f.k === 'unit') held[f.id] ??= heldItems(ds, boards, f.id, summary.avg);
+      if (f.k === 'item') holders[f.id] ??= itemHolders(ds, boards, f.id, summary.avg);
     }
-    return { scope, summary, baseline, ...rows, comps, held, meta: ds.meta };
+    return { scope, summary, baseline, ...rows, comps, held, holders, meta: ds.meta };
   });
 }
 
@@ -58,6 +66,8 @@ export interface MetaResult {
   traits: TieredRow[];
   augments: TieredRow[];
   comps: TieredComp[];
+  /** Best champions judged against their own cost and star level (see topUnits). */
+  topUnits: TopUnit[];
   highlights: { units: Highlight[]; items: Highlight[]; traits: Highlight[] };
   trends: Record<string, number>;
   previousPatch: string | null;
@@ -97,6 +107,15 @@ export async function getMeta(scopeInput: Partial<Scope> = {}): Promise<MetaResu
       }
     }
     const units = gradeRows(rows.units, minN);
+    const index = indexStatic(ds.static);
+    const standouts = topUnits(
+      unitForms(ds, boards, summary.avg),
+      (key) => {
+        const c = index.champion(key);
+        return c ? { cost: c.cost, family: c.baseName || c.name } : null;
+      },
+      minN,
+    );
     const items = gradeRows(rows.items, minSample(boards.length, 0.003, 8));
     const traits = gradeRows(rows.traits, minN);
     return {
@@ -109,6 +128,7 @@ export async function getMeta(scopeInput: Partial<Scope> = {}): Promise<MetaResu
       traits,
       augments: gradeRows(rows.augments, minN),
       comps,
+      topUnits: standouts,
       highlights: {
         units: highlights(rows.units, minN),
         items: highlights(rows.items, minN),
@@ -118,6 +138,33 @@ export async function getMeta(scopeInput: Partial<Scope> = {}): Promise<MetaResu
       previousPatch,
     };
   });
+}
+
+/** A graded row as the meta page's tier lists draw it. */
+export type TierRow = Pick<TieredRow, 'id' | 'n' | 'avg' | 'grade' | 'tier'>;
+
+/**
+ * What the page sends: the tier lists only draw graded rows, and only these fields of them (items are
+ * graded again per category, from the rows with enough games).
+ */
+export interface MetaViewData extends Omit<MetaResult, 'topUnits' | 'summary' | 'units' | 'items' | 'traits' | 'augments'> {
+  units: TierRow[];
+  items: Array<Pick<StatRow, 'id' | 'n' | 'avg'>>;
+  traits: TierRow[];
+  augments: TierRow[];
+}
+
+/** Slim a meta result down to what MetaView draws (keeps the page payload small). */
+export function metaViewData({ topUnits: _topUnits, summary: _summary, units, items, traits, augments, ...rest }: MetaResult): MetaViewData {
+  const graded = (rows: TieredRow[]) => rows.filter((r) => r.grade).map(({ id, n, avg, grade, tier }) => ({ id, n, avg, grade, tier }));
+  const itemMin = itemMinSample(rest.minN);
+  return {
+    ...rest,
+    units: graded(units),
+    items: items.filter((r) => r.n >= itemMin).map(({ id, n, avg }) => ({ id, n, avg })),
+    traits: graded(traits),
+    augments: graded(augments),
+  };
 }
 
 export async function getUnitStats(key: string, scopeInput: Partial<Scope> = {}) {
@@ -178,7 +225,11 @@ export async function getComp(id: string, scopeInput: Partial<Scope> = {}) {
   });
 }
 
-export async function datasetMeta() {
-  const ds = await getDataset();
-  return ds.meta;
+/** id → [average placement, play rate], for rows with at least minN games (home and collection tiles). */
+export type StatMap = Record<string, [number, number]>;
+
+export function statMap(rows: StatRow[], minN: number): StatMap {
+  const out: StatMap = {};
+  for (const r of rows) if (r.n >= minN) out[r.id] = [Number(r.avg.toFixed(2)), Number(r.freq.toFixed(4))];
+  return out;
 }

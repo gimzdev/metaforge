@@ -1,28 +1,20 @@
 import Link from 'next/link';
+import { Collection } from '@/components/collection';
 import { ChampionIcon } from '@/components/game/entities';
-import { Collection, type StatMap } from '@/components/home/collection';
-import { ImageTile, SectionHead, ToolColumn } from '@/components/home/section';
-import { StatsCarousel, type CarouselItem } from '@/components/home/stats-carousel';
+import { ImageTile, SectionHead, StatsCarousel, ToolColumn, type CarouselItem } from '@/components/home';
 import { PlayerSearch } from '@/components/player/player-search';
 import { currentPatch, getSetInfo } from '@/config/game';
-import { brand } from '@/lib/brand';
-import { getStaticData } from '@/lib/cdragon';
 import { env } from '@/lib/env';
 import { ingestRunning } from '@/lib/ingest';
-import { platformLabel } from '@/lib/riot/regions';
-import { indexStatic, type StaticIndex } from '@/lib/static-index';
-import { getMeta, type MetaResult } from '@/lib/stats/service';
-import type { Highlight } from '@/lib/stats/tiers';
-import type { StatRow } from '@/lib/stats/types';
-import { fmt } from '@/lib/utils';
+import { brand } from '@/lib/site';
+import { indexStatic, type StaticIndex } from '@/lib/static';
+import { getStaticData } from '@/lib/static/load';
+import type { StaticData } from '@/lib/static/types';
+import { getMeta, statMap, type MetaResult } from '@/lib/stats/service';
+import { itemMinSample, type Highlight } from '@/lib/stats/tiers';
+import { fmt, traitOf } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
-
-function toMap(rows: StatRow[], minN: number): StatMap {
-  const out: StatMap = {};
-  for (const r of rows) if (r.n >= minN) out[r.id] = [Number(r.avg.toFixed(2)), Number(r.freq.toFixed(4))];
-  return out;
-}
 
 const HIGHLIGHT_LABEL: Record<Highlight['kind'], string> = {
   best: 'Best average',
@@ -49,7 +41,7 @@ function highlightDetail(h: Highlight) {
 }
 
 /** Highlight cards for the carousel, mixed across champions, items, traits and comps. */
-function carouselItems(data: MetaResult, index: StaticIndex): CarouselItem[] {
+function carouselItems(data: MetaResult, index: StaticIndex<StaticData>): CarouselItem[] {
   const units: CarouselItem[] = [];
   for (const h of data.highlights.units) {
     const c = index.champion(h.id);
@@ -81,8 +73,7 @@ function carouselItems(data: MetaResult, index: StaticIndex): CarouselItem[] {
   }
   const traits: CarouselItem[] = [];
   for (const h of data.highlights.traits) {
-    const key = h.id.slice(0, h.id.lastIndexOf(':'));
-    const t = index.trait(key);
+    const t = index.trait(traitOf(h.id));
     if (!t) continue;
     const units = t.effects[(h.row.tier ?? 1) - 1]?.minUnits;
     traits.push({
@@ -129,10 +120,10 @@ export default async function HomePage() {
   const hasData = Boolean(data && data.meta.total > 0);
   const topComp = hasData && data ? data.comps.find((c) => c.grade) : undefined;
   const graded = hasData && data ? data.comps.filter((c) => c.grade).length : 0;
-  const topUnits = hasData && data ? data.units.filter((u) => u.grade === 'S').slice(0, 6) : [];
+  const topUnits = hasData && data ? data.topUnits : [];
   const stats =
     hasData && data
-      ? { units: toMap(data.units, data.minN), items: toMap(data.items, Math.max(5, Math.round(data.minN * 0.6))) }
+      ? { units: statMap(data.units, data.minN), items: statMap(data.items, itemMinSample(data.minN)) }
       : null;
   const scopeLabel = data && data.scope.patch !== 'all' ? `patch ${data.scope.patch}` : 'this set';
   const carousel = hasData && data ? carouselItems(data, index) : [];
@@ -144,7 +135,7 @@ export default async function HomePage() {
   return (
     <div className="space-y-24">
       {/* Masthead: sits on the full-bleed skyline from SiteBackdrop */}
-      <section className="-mt-10 grid min-h-[600px] grid-cols-1 items-center gap-12 pb-4 pt-14 sm:min-h-[660px] lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)] lg:gap-16">
+      <section className="-mt-10 grid min-h-[600px] grid-cols-1 items-center gap-12 pb-4 pt-14 sm:min-h-[660px] lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)] lg:gap-16 short:min-h-[min(660px,calc(100svh_-_211px))] short:pb-2 short:pt-8">
         <div className="max-w-2xl">
           <div className="eyebrow flex flex-wrap items-center gap-x-3 gap-y-1 text-wisp">
             <span>
@@ -156,17 +147,17 @@ export default async function HomePage() {
               </Link>
             )}
           </div>
-          <h1 className="mt-6 text-[3.1rem] font-[520] leading-[0.98] tracking-[-0.03em] text-moon sm:text-[4.6rem]">
+          <h1 className="mt-6 text-[3.1rem] font-[520] leading-[0.98] tracking-[-0.03em] text-moon sm:text-[4.6rem] short:mt-4 short:text-[3.9rem]">
             Forge your next climb<span className="text-wisp">.</span>
           </h1>
-          <p className="mt-6 max-w-xl text-[17px] leading-relaxed text-moon/80">
+          <p className="mt-6 max-w-xl text-[17px] leading-relaxed text-moon/80 short:mt-4 short:text-base">
             Tier lists, a stats explorer and a team builder for {set.name}, built from top players&apos; games and refreshed
             through the day.
           </p>
-          <PlayerSearch size="xl" className="mt-9 max-w-xl" />
+          <PlayerSearch size="xl" className="mt-9 max-w-xl short:mt-7" />
         </div>
 
-        <aside className="rounded-xl border border-line bg-night/[0.78] p-6 sm:p-7">
+        <aside className="rounded-xl border border-line bg-night/[0.78] p-6 sm:p-7 short:p-5">
           {hasData && data ? (
             <>
               <div className="flex items-baseline justify-between gap-3">
@@ -175,36 +166,24 @@ export default async function HomePage() {
                   {data.meta.newest ? `newest game ${fmt.ago(data.meta.newest)}` : collecting ? 'collecting now' : ''}
                 </span>
               </div>
-              <dl className="mt-5 divide-y divide-line border-y border-line">
+              <dl className="mt-5 divide-y divide-line border-y border-line short:mt-4">
                 {[
                   ['Boards analyzed', fmt.int(data.summary.boards)],
                   [graded > 0 ? 'Graded comps' : 'Comps tracked', String(graded > 0 ? graded : data.comps.length)],
-                  [
-                    data.meta.regions.length === 1 ? 'Region' : 'Regions',
-                    data.meta.regions.map((r) => platformLabel(r.id)).join(' · '),
-                  ],
                 ].map(([label, value]) => (
-                  <div key={label} className="flex items-baseline justify-between gap-4 py-3.5">
+                  <div key={label} className="flex items-baseline justify-between gap-4 py-3.5 short:py-2.5">
                     <dt className="text-sm text-lichen">{label}</dt>
-                    <dd
-                      className={
-                        label.startsWith('Region')
-                          ? 'truncate text-right text-[15px] font-medium text-moon'
-                          : 'num text-right font-display text-[1.45rem] leading-none text-moon'
-                      }
-                    >
-                      {value}
-                    </dd>
+                    <dd className="num text-right font-display text-[1.45rem] leading-none text-moon">{value}</dd>
                   </div>
                 ))}
               </dl>
               {topUnits.length > 0 && (
-                <div className="mt-6">
-                  <div className="eyebrow text-fog">S tier champions</div>
-                  <div className="mt-3 flex flex-wrap gap-2.5">
+                <div className="mt-6 short:mt-4">
+                  <div className="eyebrow text-fog">Top units</div>
+                  <div className="mt-3 flex flex-wrap gap-2.5 short:mt-2">
                     {topUnits.map((u) => (
-                      <div key={u.id} className="flex flex-col items-center gap-1.5">
-                        <ChampionIcon id={u.id} size="md" />
+                      <div key={u.id} className="flex flex-col items-center gap-1.5 pt-1">
+                        <ChampionIcon id={u.id} size="md" star={u.star} />
                         <span className="num text-[11px] font-medium text-good">{fmt.place(u.avg)}</span>
                       </div>
                     ))}
@@ -214,7 +193,7 @@ export default async function HomePage() {
               {topComp && (
                 <Link
                   href={`/comps/${topComp.id}`}
-                  className="group mt-6 flex items-center justify-between gap-3 border-t border-line pt-5"
+                  className="group mt-6 flex items-center justify-between gap-3 border-t border-line pt-5 short:mt-4 short:pt-4"
                 >
                   <span className="min-w-0">
                     <span className="eyebrow block text-fog">Top comp</span>
@@ -244,7 +223,7 @@ export default async function HomePage() {
       </section>
 
       {carousel.length >= 3 && (
-        <div className="-mt-12">
+        <div className="-mt-12 short:-mt-[4.5rem]">
           <StatsCarousel items={carousel} />
         </div>
       )}
