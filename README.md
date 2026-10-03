@@ -1,132 +1,111 @@
 <div align="center">
 
-# MetaForge
+<h1>MetaForge</h1>
 
-### Teamfight Tactics stats, comps and team builder
+<h3>Teamfight Tactics analytics and prediction platform</h3>
 
 [![React](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org)
-[![Next.js](https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://typescriptlang.org)
 [![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
 
----
+<hr>
 
-## About
+<h2>About</h2>
 
-MetaForge is a stats site for Teamfight Tactics **Set 18: Enchanted Wilds**. It collects the final boards of high-elo ranked games from the Riot API and turns them into tier lists, comps, item and trait stats, and a stats explorer you can slice by any combination of champions, items, traits and level.
+<p>MetaForge combines match analytics with a community-driven meta forecasting layer.<br>
+On top of the usual stats and trends, players can submit and vote on predictions<br>
+about upcoming patches and meta shifts. Getting predictions right earns points<br>
+that sit alongside regular ranked performance.</p>
 
-Everything on the site comes from real games: comps are grouped by their carries, grades account for small samples, and each champion is compared with others of its cost and star level.
+<p>The goal is to make reading the meta a two-way activity: you consume data,<br>
+but you also contribute your own read of where things are heading,<br>
+and the platform tracks how accurate that read turns out to be.</p>
 
----
+<hr>
 
-## Data
+<h2>Ranking</h2>
 
-<table>
+<table align="center">
 <tr>
 <td align="center" width="50%">
 
-### Riot API
-Ranked match boards  
-15 regions, collected hourly
+<h3>LP</h3>
+
+League Points<br>
+From ranked play
 
 </td>
 <td align="center" width="50%">
 
-### CommunityDragon
-Champions, traits, items  
-Loaded from the live game data
+<h3>PP</h3>
+
+Prediction Points<br>
+From forecast accuracy
 
 </td>
 </tr>
 </table>
 
----
+<hr>
 
-## Features
+<h2>Features</h2>
 
-<table>
+<table align="center">
 <tr>
-<td align="center">
+<td align="center" width="33%">
 
-### Meta report
-Comp tier list with typical boards  
-Champion, item and trait tiers
+<h3>Predictions</h3>
 
-</td>
-<td align="center">
-
-### Stats explorer
-Stack conditions on units, items,  
-traits, augments and level
+Submit and vote on meta changes<br>
+Track accuracy over time
 
 </td>
-<td align="center">
+<td align="center" width="33%">
 
-### Team builder
-Drag and drop hex board  
-Live synergies, share links
+<h3>Analytics</h3>
 
-</td>
-</tr>
-<tr>
-<td align="center">
-
-### Patch notes
-Buffs, nerfs and changes  
-per patch, with a timeline
+Real-time meta statistics<br>
+Historical trends
 
 </td>
-<td align="center">
+<td align="center" width="33%">
 
-### Ladder and players
-Top 100 per region  
-Riot ID lookup, match history
+<h3>Leaderboards</h3>
 
-</td>
-<td align="center">
-
-### Guides
-Item recipes with placements  
-Emblems and set mechanics
+Separate LP and PP rankings<br>
+Seasonal resets
 
 </td>
 </tr>
 </table>
 
----
+<hr>
 
-## Stack
+<h2>Stack</h2>
 
 ```javascript
 const tech = {
-  frontend: ["Next.js 16", "React 19", "TypeScript", "Tailwind CSS 4"],
-  backend: ["Next.js route handlers", "PostgreSQL (Neon) or local files"],
-  data: ["Riot API", "CommunityDragon"],
-  deploy: ["Vercel", "hourly cron for collection"]
+  frontend: ["React", "TypeScript", "Zustand", "Socket.io"],
+  backend: ["Node.js", "Express", "PostgreSQL"],
+  infrastructure: ["Redis", "Docker", "AWS"]
 };
 ```
 
----
+<hr>
 
-## Setup
+<h2>Setup</h2>
 
 ```bash
 git clone https://github.com/gimzdev/metaforge.git
 cd metaforge
 npm install
 
-cp .env.example .env.local
+cp .env.example .env
 npm run dev
 ```
 
-Set `RIOT_API_KEY` in `.env.local` to start collecting games, and `DATABASE_URL` for a Postgres database (without it, matches are stored in `.data/`). Riot development keys expire every 24 hours.
-
-To deploy on Vercel, add the same variables plus `CRON_SECRET`; `vercel.json` already schedules the hourly collection.
-
----
+<hr>
 
 [![Live](https://img.shields.io/badge/Live-000000?style=for-the-badge&logo=rocket&logoColor=white)](https://metaforge.lol)
-
-MetaForge isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
 
 </div>
