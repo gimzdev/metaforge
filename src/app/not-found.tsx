@@ -11,12 +11,8 @@ export default function NotFound() {
         <p className="mt-2 text-[15px] text-lichen">The page you asked for doesn&apos;t exist, or it rotated out with an older set.</p>
       </div>
       <div className="flex flex-wrap justify-center gap-2">
-        <Link href="/" className={buttonClass('primary', 'md')}>
-          Home
-        </Link>
-        <Link href="/meta" className={buttonClass('secondary', 'md')}>
-          Meta report
-        </Link>
+        <Link href="/" className={buttonClass('primary', 'md')}>Home</Link>
+        <Link href="/meta" className={buttonClass('secondary', 'md')}>Meta report</Link>
       </div>
       <PlayerSearch className="text-left" />
     </div>

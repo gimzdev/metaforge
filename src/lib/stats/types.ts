@@ -43,6 +43,8 @@ export interface CompUnit {
   freq: number;
   star: number;
   items: string[];
+  /** For an Avatar (Lux): the trait she plays as on these boards. */
+  trait?: string;
 }
 
 export interface CompRow {

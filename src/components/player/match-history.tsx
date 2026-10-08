@@ -6,9 +6,11 @@ import { ChevronDown, RefreshCw, TriangleAlert } from '@/components/icons';
 import { ChampionIcon, TraitBadge } from '@/components/game/entities';
 import { RANKED_QUEUE } from '@/config/game';
 import { GameImage } from '@/components/game/game-image';
+import { LpCurve } from '@/components/player/lp-curve';
 import { Skeleton } from '@/components/ui';
 import type { BoardView, MatchView } from '@/lib/players';
 import { platformFromMatchId } from '@/lib/riot/regions';
+import type { LpPoint } from '@/lib/store/types';
 import { currentIndex } from '@/lib/static';
 import { addPlacement, summarize, type PublicTotals } from '@/lib/totals';
 import { cn, deltaTone, fmt, placementTone, riotIdToSlug, sleep, toneText } from '@/lib/utils';
@@ -18,29 +20,28 @@ interface Page {
   next: number | null;
 }
 
-/* ── Loading pages of games ─────────────────────────────── */
-
-/**
- * Pages already loaded per player: shown at once when coming back (and asked for again in the
- * background once they are a minute old), forgotten five minutes after leaving the player.
- */
+/** Loaded pages per player: shown at once on return (refetched once a minute old), dropped five minutes after leaving. */
 const cache = new Map<string, { pages: Page[]; at: number; left: number | null }>();
 const FRESH_MS = 60_000;
 const KEEP_MS = 5 * 60_000;
 
 function cachedPages(key: string): Page[] {
-  const hit = cache.get(key);
-  if (hit?.left && Date.now() - hit.left > KEEP_MS) cache.delete(key);
+  const now = Date.now();
+  for (const [k, hit] of cache) if (hit.left && now - hit.left > KEEP_MS) cache.delete(k);
   return cache.get(key)?.pages ?? [];
+}
+
+/** Adds only unseen games (a new game shifts pages by one); a page with nothing new ends the list, as the server repeats its last page. */
+function append(pages: Page[], page: Page): Page[] {
+  const seen = new Set(pages.flatMap((p) => p.matches.map((m) => m.id)));
+  const matches = page.matches.filter((m) => !seen.has(m.id));
+  return [...pages, { matches, next: matches.length ? page.next : null }];
 }
 
 async function fetchPage(puuid: string, platform: string, start: number, signal: AbortSignal): Promise<Page> {
   for (let attempt = 0; ; attempt++) {
     try {
-      const res = await fetch(`/api/player/matches?puuid=${encodeURIComponent(puuid)}&platform=${platform}&start=${start}&count=20`, {
-        signal,
-        cache: 'no-store',
-      });
+      const res = await fetch(`/api/player/matches?puuid=${encodeURIComponent(puuid)}&platform=${platform}&start=${start}&count=20`, { signal, cache: 'no-store' });
       const json = (await res.json().catch(() => ({}))) as Page & { error?: string };
       if (!res.ok) throw new Error(json.error ?? `Could not load matches (${res.status})`);
       return json;
@@ -56,7 +57,7 @@ function useMatchPages(puuid: string, platform: string) {
   const [pages, setPages] = useState<Page[]>(() => cachedPages(key));
   const [fetching, setFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const live = useRef({ pages, ctl: null as AbortController | null });
+  const live = useRef({ pages, ctl: null as AbortController | null, refreshing: false });
 
   const save = useCallback(
     (next: Page[]) => {
@@ -66,56 +67,56 @@ function useMatchPages(puuid: string, platform: string) {
     },
     [key],
   );
-  /** A new request; one still running is dropped. */
-  const begin = useCallback(() => {
-    live.current.ctl?.abort();
-    const ctl = new AbortController();
-    live.current.ctl = ctl;
-    setError(null);
-    return ctl;
-  }, []);
-
-  /** One more page (start 0 starts over). */
-  const load = useCallback(
-    (start: number) => {
-      const ctl = begin();
+  /** Runs a request, dropping one still running; its pages replace the list once in. */
+  const run = useCallback(
+    (task: (signal: AbortSignal) => Promise<Page[]>, refreshing = false) => {
+      live.current.ctl?.abort();
+      const ctl = new AbortController();
+      live.current.ctl = ctl;
+      live.current.refreshing = refreshing;
+      setError(null);
       setFetching(true);
-      fetchPage(puuid, platform, start, ctl.signal)
-        .then((page) => {
-          if (!ctl.signal.aborted) save(start === 0 ? [page] : [...live.current.pages, page]);
+      task(ctl.signal)
+        .then((next) => {
+          if (!ctl.signal.aborted) save(next);
         })
         .catch((e: Error) => {
           if (!ctl.signal.aborted) setError(e.message);
         })
         .finally(() => {
-          if (!ctl.signal.aborted) setFetching(false);
+          if (ctl.signal.aborted) return;
+          live.current.refreshing = false;
+          setFetching(false);
         });
     },
-    [puuid, platform, save, begin],
+    [save],
   );
 
-  /** Ask again for as many pages as are shown and swap them in together; the old ones stay meanwhile. */
+  const load = useCallback(
+    (start: number) => {
+      // More pages during a refresh are asked for after it, from where it ends.
+      if (start > 0 && live.current.refreshing) return;
+      run(async (signal) => {
+        const page = await fetchPage(puuid, platform, start, signal);
+        return append(start === 0 ? [] : live.current.pages, page);
+      });
+    },
+    [puuid, platform, run],
+  );
+
+  /** Refetches as many pages as are shown and swaps them in together; the old ones stay meanwhile. */
   const refresh = useCallback(
-    (count: number) => {
-      const ctl = begin();
-      (async () => {
-        const fresh: Page[] = [];
+    (count: number) =>
+      run(async (signal) => {
+        let fresh: Page[] = [];
         let start: number | null = 0;
         while (start !== null && fresh.length < count) {
-          const page: Page = await fetchPage(puuid, platform, start, ctl.signal);
-          fresh.push(page);
-          start = page.next;
+          fresh = append(fresh, await fetchPage(puuid, platform, start, signal));
+          start = fresh[fresh.length - 1].next;
         }
         return fresh;
-      })()
-        .then((fresh) => {
-          if (!ctl.signal.aborted) save(fresh);
-        })
-        .catch((e: Error) => {
-          if (!ctl.signal.aborted) setError(e.message);
-        });
-    },
-    [puuid, platform, save, begin],
+      }, true),
+    [puuid, platform, run],
   );
 
   useEffect(() => {
@@ -131,37 +132,54 @@ function useMatchPages(puuid: string, platform: string) {
     };
   }, [key, load, refresh]);
 
-  const last = pages[pages.length - 1];
-  return {
-    pages,
-    pending: !pages.length && !error,
-    error,
-    fetching,
-    next: last?.next ?? null,
-    load,
-  };
+  return { pages, pending: !pages.length && !error, error, fetching, next: pages[pages.length - 1]?.next ?? null, load };
 }
 
-const PLACE_STYLE: Record<number, string> = {
-  1: 'text-firefly',
-  2: 'text-good',
-  3: 'text-good',
-  4: 'text-good',
-  8: 'text-bloom',
-};
-
-function placeBar(p: number) {
-  if (p === 1) return 'bg-firefly';
-  if (p <= 4) return 'bg-good';
-  if (p === 8) return 'bg-bloom';
-  return 'bg-fog/60';
-}
+const byPlace = (p: number, [first, top4, last, rest]: [string, string, string, string]) => (p === 1 ? first : p <= 4 ? top4 : p === 8 ? last : rest);
+const placeText = (p: number, rest: string) => byPlace(p, ['text-firefly', 'text-good', 'text-bloom', rest]);
 
 function UnitFallback({ id, star }: { id: string; star: number }) {
   const name = id.replace(/^tft\d*_/i, '').replace(/_/g, ' ');
   return (
     <span title={`${name} (${star}★)`} className="grid size-[30px] place-items-center rounded-md bg-bark text-[9px] font-semibold uppercase text-lichen">
       {name.slice(0, 3)}
+    </span>
+  );
+}
+
+/** The player's Little Legend in a circle, with their final level in a small badge on its corner. */
+function LegendBadge({ board, size = 40 }: { board: BoardView; size?: number }) {
+  return (
+    <span className="relative inline-block shrink-0" style={{ width: size, height: size }} title={board.legend ? `${board.legend.name}, level ${board.level}` : `Level ${board.level}`}>
+      {board.legend ? (
+        <GameImage src={board.legend.icon} alt={board.legend.name} className="size-full rounded-full bg-bark ring-1 ring-line-strong" />
+      ) : (
+        <span className="grid size-full place-items-center rounded-full bg-bark ring-1 ring-line-strong" aria-hidden />
+      )}
+      <span
+        className="num absolute -bottom-1 -right-1 grid min-w-[1.15rem] place-items-center rounded-full border border-line-strong bg-night px-1 text-[10px] font-bold leading-[1.15rem] text-wisp"
+        aria-label={`Level ${board.level}`}
+      >
+        {board.level}
+      </span>
+    </span>
+  );
+}
+
+/** Damage dealt to other players (when Riot sent it for the game) and gold left at the end of the game. */
+function GameStats({ board, damage, className }: { board: BoardView; damage: boolean; className?: string }) {
+  return (
+    <span className={cn('num flex items-center gap-3 text-xs text-lichen', className)}>
+      {damage && (
+        <span title="Damage dealt to players" className="inline-flex items-baseline gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-fog">Dmg</span>
+          {fmt.int(board.damage)}
+        </span>
+      )}
+      <span title="Gold left at the end" className="inline-flex items-baseline gap-1">
+        <span className="text-[10px] uppercase tracking-wider text-fog">Gold</span>
+        {fmt.int(board.goldLeft)}
+      </span>
     </span>
   );
 }
@@ -212,26 +230,28 @@ function MatchCard({ match, puuid, setNumber }: { match: MatchView; puuid: strin
   const me = match.me;
   if (!me) return null;
   const currentSet = match.setNumber === setNumber;
+  // Riot's match data carries 0 damage for everyone in some games: the figure is left out then, not shown as zeros.
+  const damage = match.lobby.some((b) => b.damage > 0);
   const platform = platformFromMatchId(match.id, 'na1');
   return (
     <article className="surface relative overflow-hidden rounded-xl">
-      <span className={cn('absolute inset-y-0 left-0 w-1', placeBar(me.placement))} aria-hidden />
+      <span className={cn('absolute inset-y-0 left-0 w-1', byPlace(me.placement, ['bg-firefly', 'bg-good', 'bg-bloom', 'bg-fog/60']))} aria-hidden />
       <div
         className="flex cursor-pointer flex-col gap-3 py-3.5 pl-5 pr-4 transition-colors hover:bg-white/[0.02] sm:flex-row sm:items-center sm:gap-5 sm:pr-5"
         onClick={(e) => {
-          // The whole row opens the lobby; links, buttons and a text selection keep their own behaviour.
+          // Links, buttons and a text selection keep their own behaviour.
           if ((e.target as HTMLElement).closest('a, button') || window.getSelection()?.toString()) return;
           setOpen((o) => !o);
         }}
       >
-        <div className="flex shrink-0 items-center gap-4 sm:w-40">
-          <div className={cn('num font-display text-3xl font-semibold', PLACE_STYLE[me.placement] ?? 'text-lichen')}>{fmt.ordinal(me.placement)}</div>
+        <div className="flex shrink-0 items-center gap-4 sm:w-56">
+          <div className={cn('num font-display text-3xl font-semibold', placeText(me.placement, 'text-lichen'))}>{fmt.ordinal(me.placement)}</div>
+          <LegendBadge board={me} size={44} />
           <div className="text-xs leading-relaxed text-lichen">
-            <div className="font-medium text-moon">{match.queueLabel}</div>
-            <div suppressHydrationWarning>{fmt.ago(match.datetime)}</div>
-            <div className="num">
-              {fmt.duration(match.length)}, level {me.level}
+            <div className="font-medium text-moon" title={`Played ${new Date(match.datetime).toLocaleString()}`}>
+              {match.queueLabel} <span className="num font-normal text-lichen">· {fmt.duration(match.length)}</span>
             </div>
+            <GameStats board={me} damage={damage} className="mt-0.5 gap-2" />
           </div>
         </div>
         <div className="min-w-0 flex-1">
@@ -256,26 +276,23 @@ function MatchCard({ match, puuid, setNumber }: { match: MatchView; puuid: strin
               className={cn('flex flex-col gap-2 border-t hairline px-5 py-3 first:border-t-0 md:flex-row md:items-center md:gap-4', b.puuid === puuid && 'bg-wisp/[0.05]')}
             >
               <div className="flex shrink-0 items-center gap-3 md:w-56">
-                <span className={cn('num w-8 font-display text-lg font-semibold', PLACE_STYLE[b.placement] ?? 'text-fog')}>
+                <span className={cn('num w-8 font-display text-lg font-semibold', placeText(b.placement, 'text-fog'))}>
                   {b.placement}
                 </span>
+                <LegendBadge board={b} size={34} />
                 {b.gameName && b.tagLine ? (
-                  <Link
-                    href={`/player/${platform}/${riotIdToSlug(b.gameName, b.tagLine)}`}
-                    className="min-w-0 truncate text-sm font-medium hover:text-wisp"
-                  >
+                  <Link href={`/player/${platform}/${riotIdToSlug(b.gameName, b.tagLine)}`} className="min-w-0 truncate text-sm font-medium hover:text-wisp">
                     {b.gameName}
                     <span className="text-fog">#{b.tagLine}</span>
                   </Link>
                 ) : (
                   <span className="text-sm text-fog">Unknown player</span>
                 )}
-                <span className="num ml-auto text-xs text-fog md:hidden">Lv {b.level}</span>
               </div>
               <div className="min-w-0 flex-1">
                 <BoardRow board={b} compact currentSet={currentSet} />
               </div>
-              <span className="num hidden shrink-0 text-xs text-fog md:block">Lv {b.level}</span>
+              <GameStats board={b} damage={damage} className="shrink-0 md:w-44 md:justify-end" />
             </div>
           ))}
         </div>
@@ -284,21 +301,20 @@ function MatchCard({ match, puuid, setNumber }: { match: MatchView; puuid: strin
   );
 }
 
-/** Games in the recent-form banner, and how many are loaded up front before the season walk starts. */
+/** Games in the recent-form banner, and how many are loaded up front. */
 const SAMPLE = 20;
 const DEEP = 40;
 
-/** Totals per player and set as last received, so coming back to one shows them at once. */
+/** Totals per player and set as last received, shown at once on return. */
 const totalsCache = new Map<string, PublicTotals>();
 
-/** Asks the server to walk the player's ranked games of one set a step at a time until it has counted them all. */
-function useTotals(puuid: string, platform: string, set: number, ready: boolean) {
+/** Has the server walk the player's ranked games of one set, step by step, until all are counted. */
+function useTotals(puuid: string, platform: string, set: number) {
   const key = `${puuid}:${set}`;
   const [state, setState] = useState<{ key: string; totals: PublicTotals | null }>(() => ({ key, totals: totalsCache.get(key) ?? null }));
   const [running, setRunning] = useState(false);
   useEffect(() => {
     setState({ key, totals: totalsCache.get(key) ?? null });
-    if (!ready) return;
     const ctl = new AbortController();
     (async () => {
       let failures = 0;
@@ -324,7 +340,7 @@ function useTotals(puuid: string, platform: string, set: number, ready: boolean)
       ctl.abort();
       setRunning(false);
     };
-  }, [key, puuid, platform, set, ready]);
+  }, [key, puuid, platform, set]);
   return { totals: state.key === key ? state.totals : null, running };
 }
 
@@ -334,27 +350,27 @@ export function MatchHistory({
   setNumber,
   identity,
   ranks,
+  lp,
   totals,
 }: {
   puuid: string;
   platform: string;
   setNumber: number;
-  /** Server-rendered pieces of the player card: who they are, and their ranked queues. */
   identity: ReactNode;
-  /** The current ranked queues (Riot only reports the current rank, not the one held in earlier sets). */
   ranks: ReactNode;
-  /** Ranked totals for the season (Riot reports top 4 finishes, not first places). */
+  /** Tracked ranks this set, for the LP chart beside the profile. */
+  lp: LpPoint[];
+  /** Riot's ranked season totals (it reports top 4 finishes, not first places). */
   totals: { games: number; top4: number } | null;
 }) {
   const index = currentIndex();
   const query = useMatchPages(puuid, platform);
 
-  // Only games that include this player can be shown (Riot always includes them; be defensive anyway).
   const matches = useMemo(() => query.pages.flatMap((p) => p.matches).filter((m) => m.me), [query.pages]);
   const mine = useMemo(() => matches.map((m) => m.me).filter((b): b is BoardView => Boolean(b)), [matches]);
   const loaded = query.pages.reduce((n, p) => n + p.matches.length, 0);
 
-  // Recent form uses the last 20 games and the card's win rate the last 40, 20 per request.
+  // Load DEEP games up front, 20 per request.
   const { next, fetching, error, load } = query;
   useEffect(() => {
     if (next !== null && !fetching && !error && loaded < DEEP) load(next);
@@ -364,7 +380,6 @@ export function MatchHistory({
   const [viewSet, setViewSet] = useState(setNumber);
   const isCurrent = viewSet === setNumber;
 
-  // The last 20 games: the averages, the most played champions and how they finished.
   const summary = useMemo(() => {
     const sample = mine.slice(0, SAMPLE);
     if (!sample.length) return null;
@@ -398,9 +413,8 @@ export function MatchHistory({
     };
   }, [mine, index]);
 
-  // Totals for the chosen set: the server walks the player's ranked games of it. For the current set, the loaded
-  // games stand in until it has counted more than they hold, and Riot's own ranked totals give top 4 and games.
-  const walk = useTotals(puuid, platform, viewSet, true);
+  // For the current set the loaded games stand in until the walk counts more, and Riot's totals give top 4 and games.
+  const walk = useTotals(puuid, platform, viewSet);
   const local = useMemo(() => {
     if (!isCurrent) return null;
     const t = { games: 0, sum: 0, spread: Array.from({ length: 8 }, () => 0) };
@@ -408,6 +422,11 @@ export function MatchHistory({
     return summarize(t);
   }, [matches, setNumber, isCurrent]);
   const server = walk.totals ? summarize(walk.totals) : null;
+  // This set's loaded ranked games ([minutes, place]) for the LP curve's estimate before tracking.
+  const games = useMemo(
+    () => matches.flatMap((m): Array<[number, number]> => (m.me && m.queue === RANKED_QUEUE && m.setNumber === setNumber ? [[Math.round(m.datetime / 60_000), m.me.placement]] : [])),
+    [matches, setNumber],
+  );
   const deep = server && (!local || server.games >= local.games) ? server : local;
   const riotGames = isCurrent ? totals?.games ?? 0 : 0;
   const counted = deep?.games ?? 0;
@@ -415,17 +434,13 @@ export function MatchHistory({
   const counting = walk.running && (isCurrent ? riotGames > 0 && counted < riotGames : true);
   const empty = !isCurrent && !walk.running && walk.totals?.done && !deep;
   const sets = Array.from({ length: setNumber }, (_, i) => setNumber - i);
-  // Sets the player has games in (known once the server has looked), so the others can be greyed out.
-  // Asked once the first totals are in (so they are not slowed down), or after a few seconds regardless. Until it
-  // answers, only the current set can be picked; if it fails, every set can.
+  // Sets with games (others greyed out), asked after the first totals so as not to slow them, or after 4s.
+  // Until it answers only the current set can be picked; if it fails, every set can.
   const [played, setPlayed] = useState<Set<number> | null>(null);
   const [askSets, setAskSets] = useState(false);
   const haveTotals = walk.totals !== null;
   useEffect(() => {
-    if (haveTotals) {
-      setAskSets(true);
-      return;
-    }
+    if (haveTotals) return setAskSets(true);
     const timer = setTimeout(() => setAskSets(true), 4000);
     return () => clearTimeout(timer);
   }, [haveTotals]);
@@ -437,14 +452,14 @@ export function MatchHistory({
       .then((json: { sets: number[] }) => setPlayed(new Set(json.sets)))
       .catch(() => !ctl.signal.aborted && setPlayed(new Set(sets)));
     return () => ctl.abort();
-  }, [askSets, puuid, platform]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [askSets, puuid, platform]);
 
   const tile = (p: number, i: number) => (
     <span
       key={i}
       className={cn(
         'num grid h-8 place-items-center rounded-md text-xs font-bold',
-        p === 0 ? 'bg-bark/60 text-transparent' : p === 1 ? 'bg-firefly text-night' : p <= 4 ? 'bg-good text-night' : p === 8 ? 'bg-bloom text-night' : 'bg-lichen text-night',
+        p === 0 ? 'bg-bark/60 text-transparent' : byPlace(p, ['bg-firefly text-night', 'bg-good text-night', 'bg-bloom text-night', 'bg-lichen text-night']),
       )}
     >
       {p || '·'}
@@ -469,8 +484,6 @@ export function MatchHistory({
         ? `No ranked games found for Set ${viewSet}`
         : '';
 
-  // The player and their totals for the chosen set. Riot reports the current season's top 4 and games; first
-  // places and average place come from the games themselves.
   const side = (
     <aside aria-label="Player" className="surface rounded-xl p-5">
       <div className="flex items-start gap-3">
@@ -512,14 +525,14 @@ export function MatchHistory({
         {stat('games', 'Games', useRiot ? fmt.int(totals.games) : deep ? fmt.int(deep.games) : '–', '', 'text-[1.4rem]')}
       </dl>
       {note && (
-        <p className={cn('mt-3 text-[11px] text-fog', counting && 'animate-pulse')} aria-live="polite">
+        // Busy while counting: a screen reader waits for the result instead of reading out every step.
+        <p className={cn('mt-3 text-[11px] text-fog', counting && 'animate-pulse')} aria-live="polite" aria-busy={counting || undefined}>
           {note}
         </p>
       )}
     </aside>
   );
 
-  // Top right, beside the player: the last 20 games in four cells (numbers, most played, results, finishes).
   const recentSpread = summary?.spread ?? Array.from({ length: 8 }, () => 0);
   const spreadTop = Math.max(1, ...recentSpread);
   const label = 'font-sans text-xs font-medium uppercase tracking-wider text-fog';
@@ -531,11 +544,11 @@ export function MatchHistory({
       <div className={cn('num mt-1.5 min-h-4 text-[11px]', subTone)}>{sub}</div>
     </div>
   );
-  // How the last 20 compare with the whole set: minus is better (a lower average place).
+  // Minus is better (a lower average place).
   const toTotal = summary && deep && deep.games > summary.games ? summary.avg - deep.avg : null;
   const recent = (
     <section aria-label="Recent games" className="surface overflow-hidden rounded-xl">
-      <div className="grid lg:grid-cols-2">
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4">
         <div className={cell}>
           <h2 className={label}>Last {SAMPLE} games</h2>
           <dl className="my-auto grid grid-cols-3 gap-x-4 pt-4">
@@ -551,7 +564,7 @@ export function MatchHistory({
           </dl>
         </div>
 
-        <div className={cn(cell, 'border-t hairline lg:border-l lg:border-t-0 lg:border-line')}>
+        <div className={cn(cell, 'border-t hairline sm:border-l sm:border-t-0')}>
           <div className={label}>Most played</div>
           {summary && summary.champions.length > 0 ? (
             <ul className="my-auto grid grid-cols-2 gap-x-5 gap-y-3 pt-4">
@@ -570,18 +583,22 @@ export function MatchHistory({
           )}
         </div>
 
-        <div className={cn(cell, 'border-t hairline')}>
+        <div className={cn(cell, 'border-t hairline xl:border-l xl:border-t-0')}>
           <div className={label}>Placements</div>
           <div className="my-auto grid grid-cols-10 gap-1.5 pt-4">{Array.from({ length: SAMPLE }, (_, i) => summary?.recent[i] ?? 0).map(tile)}</div>
         </div>
 
-        <div className={cn(cell, 'border-t hairline lg:border-l lg:border-line')}>
+        <div className={cn(cell, 'border-t hairline sm:border-l xl:border-t-0')}>
           <div className={label}>Finishes</div>
-          <div className="my-auto box-content grid h-[4.75rem] grid-cols-8 items-end gap-2 pt-4" aria-label="Finishes by place">
+          <div
+            role="img"
+            aria-label={`Finishes by place: ${recentSpread.map((n, i) => `${fmt.ordinal(i + 1)} ${n}`).join(', ')}`}
+            className="my-auto box-content grid h-[4.75rem] grid-cols-8 items-end gap-2 pt-4"
+          >
             {recentSpread.map((n, i) => (
               <div key={i} className="flex h-full flex-col items-center justify-end gap-1.5">
                 <div
-                  className={cn('w-full rounded-sm', i === 0 ? 'bg-firefly' : i < 4 ? 'bg-good' : i === 7 ? 'bg-bloom' : 'bg-lichen', n === 0 && 'opacity-25')}
+                  className={cn('w-full rounded-sm', byPlace(i + 1, ['bg-firefly', 'bg-good', 'bg-bloom', 'bg-lichen']), n === 0 && 'opacity-25')}
                   style={{ height: `${n === 0 ? 5 : Math.max(14, (n / spreadTop) * 100)}%`, maxHeight: 'calc(100% - 1.1rem)' }}
                 />
                 <span className="num text-[10px] leading-none text-fog">{i + 1}</span>
@@ -594,12 +611,13 @@ export function MatchHistory({
   );
 
   const shell = (body: ReactNode) => (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[24rem_minmax(0,1fr)]">
         {side}
-        {recent}
+        <LpCurve points={lp} games={games} setNumber={setNumber} />
       </div>
-      {body}
+      {recent}
+      <div className="pt-4">{body}</div>
     </div>
   );
 

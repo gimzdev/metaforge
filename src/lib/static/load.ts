@@ -9,13 +9,8 @@ import { getStore } from '@/lib/store';
 import { normalizeCdragon, type RawCdragon } from './normalize';
 import type { StaticData, StaticLite, StaticText } from './types';
 
-/**
- * Game data (champions, traits, items, augments) for the current set from CommunityDragon,
- * cached in memory, on disk and (with Postgres) in the database, so a new serverless instance
- * reads a small saved copy instead of downloading and parsing CommunityDragon's whole file.
- * A stale copy is served while CommunityDragon is unreachable.
- */
-
+// Game data for the current set from CommunityDragon, cached in memory, on disk and (with Postgres) in the database, so a
+// new serverless instance reads a small saved copy instead of CommunityDragon's whole file. Stale copies serve while it's down.
 const FRESH_MS = 6 * 60 * 60 * 1000;
 const CACHE_VERSION = 5;
 
@@ -85,15 +80,16 @@ async function fetchFresh(): Promise<StaticData> {
   if (env.staticDataFile) {
     return normalizeCdragon(JSON.parse(await fs.readFile(env.staticDataFile, 'utf8')) as RawCdragon, setNumber, 'file');
   }
-  const res = await fetch(env.staticDataUrl, {
-    cache: 'no-store',
-    signal: AbortSignal.timeout(90_000),
-    headers: { 'user-agent': 'MetaForge/1.0' },
-  });
+  const res = await fetch(env.staticDataUrl, { cache: 'no-store', signal: AbortSignal.timeout(90_000), headers: { 'user-agent': 'MetaForge/1.0' } });
   if (!res.ok) throw new Error(`CommunityDragon responded ${res.status}`);
   const data = normalizeCdragon((await res.json()) as RawCdragon, setNumber, 'cdragon');
   if (!data.champions.length || !data.traits.length) throw new Error('CommunityDragon data had no champions');
   return data;
+}
+
+/** The same game data, wherever each copy came from. */
+function sameContent(a: StaticData, b: StaticData) {
+  return JSON.stringify({ ...a, source: null }) === JSON.stringify({ ...b, source: null });
 }
 
 /** The current game data. A stale copy is returned at once while a fresh one loads in the background. */
@@ -107,21 +103,28 @@ export function getStaticData(): Promise<StaticData> {
 }
 
 async function load(s: Slot): Promise<StaticData> {
+  let readCopy = false;
   try {
     if (!s.data && !env.staticDataFile) {
+      // A new server starts from the saved copy, even a stale one: that keeps CommunityDragon's whole
+      // file out of cold starts. Its old loadedAt makes the next call fetch a fresh copy in the background.
       const saved = await readSaved();
-      if (saved && Date.now() - saved.savedAt < FRESH_MS) {
+      readCopy = true;
+      if (saved) {
         Object.assign(s, { data: saved.data, loadedAt: saved.savedAt });
         return saved.data;
       }
     }
     const fresh = await fetchFresh();
-    Object.assign(s, { data: fresh, loadedAt: Date.now(), lastError: null });
+    // Game data changes once a patch: an identical copy keeps the current object, so the stats dataset
+    // and every cached result built on it stay valid instead of being rebuilt every six hours.
+    const current = s.data && sameContent(s.data, fresh) ? Object.assign(s.data, { source: fresh.source }) : fresh;
+    Object.assign(s, { data: current, loadedAt: Date.now(), lastError: null });
     void writeSaved(fresh);
-    return fresh;
+    return current;
   } catch (error) {
     s.lastError = error instanceof Error ? error.message : String(error);
-    const fallback = s.data ?? (await readSaved())?.data;
+    const fallback = s.data ?? (readCopy ? null : (await readSaved())?.data);
     if (!fallback) throw new Error(`Game data unavailable: ${s.lastError}`);
     // Keep serving the old copy and try again in about 10 minutes.
     Object.assign(s, { data: fallback, loadedAt: Date.now() - FRESH_MS + 10 * 60_000 });
@@ -148,29 +151,27 @@ export function staticDataStatus() {
 const derived = new WeakMap<StaticData, { lite: StaticLite; text: StaticText; version: string }>();
 
 function derive(data: StaticData) {
-  let hit = derived.get(data);
-  if (!hit) {
-    const lite: StaticLite = {
-      set: data.set,
-      champions: data.champions.map(({ key, slug, name, cost, traits, row, icon, tile }) => ({ key, slug, name, cost, traits, row, icon, tile })),
-      traits: data.traits.map(({ key, slug, name, icon, kind, effects, champions }) => ({
-        key, slug, name, icon, kind, champions, effects: effects.map(({ minUnits, style }) => ({ minUnits, style })),
-      })),
-      items: data.items.map(({ desc: _desc, ...item }) => item),
-      augments: data.augments.map(({ desc: _desc, ...augment }) => augment),
-      itemAliases: data.itemAliases,
-    };
-    const text: StaticText = {
-      abilities: Object.fromEntries(data.champions.map((c) => [c.key, { name: c.ability.name, desc: c.ability.desc }])),
-      traits: Object.fromEntries(data.traits.map((t) => [t.key, { desc: t.desc, effects: t.effects.map((e) => e.desc) }])),
-      items: Object.fromEntries(data.items.map((i) => [i.key, i.desc])),
-      augments: Object.fromEntries(data.augments.map((a) => [a.key, a.desc])),
-    };
-    const version = createHash('sha1').update(JSON.stringify(text)).digest('base64url').slice(0, 12);
-    hit = { lite, text, version };
-    derived.set(data, hit);
-  }
-  return hit;
+  const hit = derived.get(data);
+  if (hit) return hit;
+  const lite: StaticLite = {
+    set: data.set,
+    champions: data.champions.map(({ key, slug, name, cost, traits, row, icon, tile }) => ({ key, slug, name, cost, traits, row, icon, tile })),
+    traits: data.traits.map(({ key, slug, name, icon, kind, effects, champions }) => ({
+      key, slug, name, icon, kind, champions, effects: effects.map(({ minUnits, style }) => ({ minUnits, style })),
+    })),
+    items: data.items.map(({ desc: _desc, ...item }) => item),
+    augments: data.augments.map(({ desc: _desc, ...augment }) => augment),
+    itemAliases: data.itemAliases,
+  };
+  const text: StaticText = {
+    abilities: Object.fromEntries(data.champions.map((c) => [c.key, { name: c.ability.name, desc: c.ability.desc }])),
+    traits: Object.fromEntries(data.traits.map((t) => [t.key, { desc: t.desc, effects: t.effects.map((e) => e.desc) }])),
+    items: Object.fromEntries(data.items.map((i) => [i.key, i.desc])),
+    augments: Object.fromEntries(data.augments.map((a) => [a.key, a.desc])),
+  };
+  const out = { lite, text, version: createHash('sha1').update(JSON.stringify(text)).digest('base64url').slice(0, 12) };
+  derived.set(data, out);
+  return out;
 }
 
 /** Everything but descriptions: what every page carries. */

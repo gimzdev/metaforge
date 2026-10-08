@@ -11,7 +11,8 @@ import { brand } from '@/lib/site';
 import { riotIdToSlug } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
-export const metadata: Metadata = { title: 'Your profile' };
+// Sign-in and its error messages, nothing to find in search (also disallowed in robots.txt).
+export const metadata: Metadata = { title: 'Your profile', robots: { index: false } };
 
 const ERRORS: Record<string, string> = {
   signin_unavailable: 'Riot Sign-On is not configured on this server.',
@@ -29,7 +30,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Sear
     let platform = 'na1';
     if (env.riotApiKey) {
       try {
-        platform = (await getActivePlatform(session.puuid)) ?? 'na1';
+        platform = (await getActivePlatform(session.puuid, { deadline: Date.now() + 10_000 })) ?? 'na1';
       } catch {
         /* fall back to NA; the player page corrects the region */
       }
@@ -39,11 +40,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Sear
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-6">
-      <PageHeader
-        title="Your profile"
-        art={brand.learn}
-        description="Sign in with your Riot account to jump straight to your own games, or look up any player by Riot ID."
-      />
+      <PageHeader title="Your profile" art={brand.learn} description="Sign in with your Riot account to jump straight to your own games, or look up any player by Riot ID." />
       {error && (
         <div className="flex items-start gap-3 rounded-xl border border-bloom/30 bg-bloom/10 p-4 text-sm">
           <TriangleAlert className="mt-0.5 size-5 shrink-0 text-bloom" aria-hidden />
@@ -63,9 +60,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Sear
         ) : (
           <>
             <h2 className="text-lg font-semibold">Sign-in isn&apos;t set up here</h2>
-            <p className="mt-1 text-sm text-lichen">
-              This server has no Riot Sign-On client configured. You can still look up any player below.
-            </p>
+            <p className="mt-1 text-sm text-lichen">This server has no Riot Sign-On client configured. You can still look up any player below.</p>
           </>
         )}
       </div>

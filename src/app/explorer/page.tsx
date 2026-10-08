@@ -10,8 +10,9 @@ export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'Stats explorer',
-  description:
-    'Filter ranked TFT boards by champions, stars, items, trait breakpoints and level, and see how everything does on the boards that match.',
+  description: 'Filter ranked TFT boards by champions, stars, items, trait breakpoints and level, and see how everything does on the boards that match.',
+  // Filtered views (?f=) are variants of this page.
+  alternates: { canonical: '/explorer' },
 };
 
 export default async function ExplorerPage({ searchParams }: { searchParams: SearchParams }) {
@@ -30,13 +31,5 @@ export default async function ExplorerPage({ searchParams }: { searchParams: Sea
 
   const tabParam = param(sp, 'tab') as ExplorerTab | undefined;
   const tab: ExplorerTab = tabParam && EXPLORER_TABS.includes(tabParam) ? tabParam : 'units';
-  return (
-    <ExplorerApp
-      initial={result}
-      initialFilters={filters}
-      initialTab={tab}
-      initialHeld={cleanKey(param(sp, 'held'))}
-      initialHolds={cleanKey(param(sp, 'holds'))}
-    />
-  );
+  return <ExplorerApp initial={result} initialFilters={filters} initialTab={tab} initialHeld={cleanKey(param(sp, 'held'))} initialHolds={cleanKey(param(sp, 'holds'))} />;
 }

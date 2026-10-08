@@ -4,22 +4,46 @@ import { Flame, KeyRound, SearchX, TriangleAlert } from '@/components/icons';
 import { GameImage } from '@/components/game/game-image';
 import { MatchHistory } from '@/components/player/match-history';
 import { PlayerSearch, RememberPlayer } from '@/components/player/player-search';
-import { configuredSetNumber } from '@/config/game';
+import { configuredSetNumber, getSetInfo } from '@/config/game';
 import { getSession } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { lookupPlayer, profileIconUrl, rankLabel, tierColor, type PlayerProfile } from '@/lib/players';
-import { RiotError, type LeagueEntryDto } from '@/lib/riot/api';
-import { getPlatform, normalizePlatform } from '@/lib/riot/regions';
+import { getAccountByRiotId, RiotError, type LeagueEntryDto } from '@/lib/riot/api';
+import { getStore } from '@/lib/store';
+import type { LpPoint } from '@/lib/store/types';
+import { getPlatform, normalizePlatform, platformLabel } from '@/lib/riot/regions';
 import { cn, fmt, riotIdToSlug, safeDecode, slugToRiotId } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
 type Params = Promise<{ region: string; riotId: string }>;
 
+/** The Riot ID in the address, or null. Looser than Riot's 16/5 limits so no real name is refused, but junk costs no Riot call. */
+function riotIdFrom(slug: string) {
+  const id = slugToRiotId(slug);
+  return id && [...id.gameName].length <= 32 && [...id.tagLine].length <= 10 ? id : null;
+}
+
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
-  const { riotId } = await params;
-  const id = slugToRiotId(riotId);
-  return { title: id ? `${id.gameName}#${id.tagLine}` : 'Player' };
+  const { region, riotId } = await params;
+  const id = riotIdFrom(riotId);
+  const platform = normalizePlatform(region);
+  if (!id || !platform) return { title: 'Player', robots: { index: false } };
+  const name = `${id.gameName}#${id.tagLine}`;
+  // Only a real player's page is indexable. Metadata reaches the <head> although the page streams, and this lookup
+  // is the page's own first call (cached and shared).
+  const indexable =
+    Boolean(env.riotApiKey) &&
+    (await getAccountByRiotId(id.gameName, id.tagLine, { deadline: Date.now() + 8_000 }).then(
+      () => true,
+      () => false,
+    ));
+  return {
+    title: name,
+    description: `${name} on ${platformLabel(platform)}: Teamfight Tactics rank and recent match history.`,
+    alternates: { canonical: `/player/${platform}/${riotIdToSlug(id.gameName, id.tagLine)}` },
+    ...(indexable ? {} : { robots: { index: false } }),
+  };
 }
 
 function RankRow({ label, entry }: { label: string; entry?: LeagueEntryDto }) {
@@ -32,11 +56,9 @@ function RankRow({ label, entry }: { label: string; entry?: LeagueEntryDto }) {
       <dd className="flex items-baseline gap-2 text-right">
         {entry && name ? (
           <>
-            <span className="font-semibold" style={{ color: tierColor(tier) }}>
-              {name}
-            </span>
+            <span className="font-semibold" style={{ color: tierColor(tier) }}>{name}</span>
             <span className="num text-sm text-lichen">{hyper ? `${fmt.int(entry.ratedRating ?? 0)} rating` : `${fmt.int(entry.leaguePoints ?? 0)} LP`}</span>
-            {entry.hotStreak && <Flame className="size-3.5 self-center text-firefly" aria-label="Hot streak" />}
+            {entry.hotStreak && <Flame className="size-3.5 self-center text-firefly" role="img" aria-label="Hot streak" />}
           </>
         ) : (
           <span className="text-sm text-fog">Unranked</span>
@@ -61,6 +83,8 @@ function RankList({ entries }: { entries: LeagueEntryDto[] }) {
 function Problem({ icon: Icon, title, body, tone = 'bloom' }: { icon: typeof TriangleAlert; title: string; body: string; tone?: 'bloom' | 'firefly' }) {
   return (
     <div className="mx-auto max-w-xl space-y-6 py-10 text-center">
+      {/* A missing player or a Riot hiccup answers 200: keep it out of search results (React puts this in the head). */}
+      <meta name="robots" content="noindex" />
       <Icon className={cn('mx-auto size-10', tone === 'bloom' ? 'text-bloom' : 'text-firefly')} aria-hidden />
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
@@ -73,7 +97,7 @@ function Problem({ icon: Icon, title, body, tone = 'bloom' }: { icon: typeof Tri
 
 export default async function PlayerPage({ params }: { params: Params }) {
   const { region, riotId } = await params;
-  const id = slugToRiotId(riotId);
+  const id = riotIdFrom(riotId);
   const platform = normalizePlatform(region);
   if (!id || !platform) notFound();
 
@@ -95,12 +119,14 @@ export default async function PlayerPage({ params }: { params: Params }) {
   } catch (error) {
     if (error instanceof RiotError && error.code === 'not_found') {
       failure = { title: 'Player not found', body: `No Riot account named ${id.gameName}#${id.tagLine}. Check the spelling and the tag.`, notFound: true };
-    } else if (error instanceof RiotError && error.code === 'rate') {
+    } else if (error instanceof RiotError && (error.code === 'rate' || error.code === 'budget')) {
       failure = { title: 'The Riot API is busy', body: 'Too many requests right now. Try again in a minute.' };
-    } else if (error instanceof RiotError && error.code === 'key') {
-      failure = { title: 'API key rejected', body: 'The Riot API key was rejected. Development keys expire every 24 hours.' };
+    } else if (error instanceof RiotError && (error.code === 'key' || error.code === 'config')) {
+      failure = { title: 'Player lookup is unavailable', body: 'MetaForge cannot reach the Riot API right now. Try again later.' };
     } else {
-      failure = { title: 'Lookup failed', body: error instanceof Error ? error.message : 'Something went wrong talking to Riot.' };
+      // Riot's own messages are safe to show; anything else stays in the server log.
+      if (!(error instanceof RiotError)) console.error('[metaforge] player lookup failed:', error);
+      failure = { title: 'Lookup failed', body: error instanceof RiotError ? error.message : 'Something went wrong talking to Riot. Try again in a moment.' };
     }
   }
 
@@ -109,16 +135,22 @@ export default async function PlayerPage({ params }: { params: Params }) {
   }
 
   const canonical = riotIdToSlug(profile.gameName, profile.tagLine);
-  if (profile.platform !== platform || safeDecode(canonical) !== safeDecode(riotId)) {
-    redirect(`/player/${profile.platform}/${canonical}`);
-  }
+  if (profile.platform !== platform || safeDecode(canonical) !== safeDecode(riotId)) redirect(`/player/${profile.platform}/${canonical}`);
 
   const session = await getSession();
   const isMe = session?.puuid === profile.puuid;
   const icon = profileIconUrl(profile.profileIconId);
   const main = profile.ranked.find((r) => r.queueType === 'RANKED_TFT');
+  const setNumber = configuredSetNumber();
+  const since = Date.parse(`${getSetInfo(setNumber).start}T00:00:00Z`) || 0;
+  const lp = await getStore()
+    .lpHistory(profile.puuid, since)
+    .catch((): LpPoint[] => []);
+  const tail = lp.at(-1);
+  if (main?.tier && !(tail && tail.tier === main.tier && tail.division === (main.rank ?? null) && tail.lp === main.leaguePoints)) {
+    lp.push({ at: Date.now(), tier: main.tier, division: main.rank ?? null, lp: main.leaguePoints ?? 0 });
+  }
   const totals = main && main.wins + main.losses > 0 ? { games: main.wins + main.losses, top4: main.wins / (main.wins + main.losses) } : null;
-  const current = configuredSetNumber();
 
   return (
     <div className="space-y-8">
@@ -127,8 +159,9 @@ export default async function PlayerPage({ params }: { params: Params }) {
         key={`${profile.puuid}|${profile.platform}`}
         puuid={profile.puuid}
         platform={profile.platform}
-        setNumber={current}
+        setNumber={setNumber}
         totals={totals}
+        lp={lp}
         identity={
           <div className="flex min-w-0 items-center gap-4 sm:gap-5">
             <div className="relative shrink-0">

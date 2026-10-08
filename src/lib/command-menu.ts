@@ -1,13 +1,6 @@
-/**
- * How the header search ranks and orders results, matching the command menu it was
- * first built with (cmdk 1.1): the same fuzzy score (command-score), and the same
- * order as that menu showed on screen. That menu re-sorted the entries already on
- * screen, best first, each time the search changed, so ties keep their previous
- * order, and entries that come back after a deletion return to their place in the
- * list rather than being sorted in. Groups keep their order.
- */
-
-/* ── command-score (MIT, used by cmdk) ──────────────────── */
+// Header search ranking, matching cmdk 1.1 (which it was first built with): its fuzzy score (command-score, MIT) and its
+// on-screen order. cmdk re-sorted the entries on screen, best first, on each search change, so ties keep their previous
+// order and entries returning after a deletion go back to their place rather than being sorted in. Groups keep their order.
 
 const SCORE_CONTINUE_MATCH = 1;
 const SCORE_SPACE_WORD_JUMP = 0.9;
@@ -69,8 +62,6 @@ function commandScore(value: string, search: string): number {
   return scoreFrom(value, search, lowered(value), lowered(search), 0, 0, {});
 }
 
-/* ── Order on screen ────────────────────────────────────── */
-
 export interface MenuRow {
   id: string;
   /** What the search is matched against (e.g. "champion Ahri"). */
@@ -82,10 +73,7 @@ export interface MenuGroup<R extends MenuRow> {
   rows: R[];
 }
 
-/**
- * Insert new ids the way React places new children: right before the next sibling
- * (in source order) that was already on screen, or at the end.
- */
+/** Inserts new ids as React places new children: before the next (source-order) sibling already on screen, or at the end. */
 function place(onScreen: string[], order: string[], add: string[]): string[] {
   if (!add.length) return onScreen;
   const out = [...onScreen];
@@ -100,19 +88,11 @@ function place(onScreen: string[], order: string[], add: string[]): string[] {
   return out;
 }
 
-/** Keeps what the menu has on screen between renders; `update` gives the next screen. */
 export class MenuOrder {
-  /** The search the entries are currently scored against. */
   search = '';
-  /**
-   * The selected entry's value. The menu picks the first entry on screen when the search
-   * changes or it opens with nothing selected, and keeps a pick while it is closed.
-   */
+  /** The selected entry's value: the first on screen after a search change or when nothing on screen is picked; kept while closed. */
   value: string | null = null;
-  /**
-   * When a new search moves the pick, the menu brought the entry picked before into view
-   * (if it is still listed), not the new one. The screen does the same.
-   */
+  /** When a new search moves the pick, cmdk scrolled the previously picked entry (if still listed) into view, not the new one. */
   scrollTo: string | null = null;
   private open = false;
   private items = new Map<string, string[]>();
@@ -136,7 +116,6 @@ export class MenuOrder {
     const home = new Map<string, string>();
     for (const g of spec) for (const r of g.rows) rows.set(r.id, r), home.set(r.id, g.id);
 
-    // Whatever went away leaves the screen.
     for (const [g, ids] of this.items) this.items.set(g, ids.filter((id) => home.get(id) === g));
     for (const id of [...this.values.keys()]) {
       if (!rows.has(id)) this.values.delete(id), this.scores.delete(id);
@@ -162,7 +141,8 @@ export class MenuOrder {
       this.render(spec);
     }
     const screen = spec.map((g) => ({ ...g, rows: (this.items.get(g.id) ?? []).map((id) => rows.get(id)!) })).filter((g) => g.rows.length > 0);
-    if (searched || (!this.open && !this.value)) {
+    const picked = this.value !== null && screen.some((g) => g.rows.some((r) => r.value === this.value));
+    if (searched || !picked) {
       const first = screen[0]?.rows[0]?.value ?? null;
       if (searched && this.open && this.value && first !== this.value) this.scrollTo = this.value;
       this.value = first;
@@ -184,7 +164,6 @@ export class MenuOrder {
     }
   }
 
-  /** Best first; ties keep the order they had on screen. */
   private sort() {
     if (!this.search) return;
     const score = (id: string) => this.scores.get(id) ?? 0;

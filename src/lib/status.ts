@@ -33,12 +33,14 @@ async function readStatus(): Promise<StatusPayload> {
   const setNumber = configuredSetNumber();
   const store = getStore();
   let stats = { matches: 0, boards: 0, lastMatchAt: null as number | null };
-  let storeError: string | null = null;
+  let storeError = false;
   try {
-    // Counting boards is not free on a big table.
-    stats = await cachedAsync(`store-stats:${setNumber}`, 30_000, () => store.stats(setNumber));
+    // Counting boards joins every stored board (a second or more on a big table); counts only move with collection runs.
+    stats = await cachedAsync(`store-stats:${setNumber}`, 120_000, () => store.stats(setNumber));
   } catch (error) {
-    storeError = error instanceof Error ? error.message : String(error);
+    // Public payload: details (hosts, users) only go to the server log.
+    console.error('[metaforge] status: reading the store failed:', error);
+    storeError = true;
   }
   const [report] = await Promise.all([lastIngestReport(), tryGetStaticData()]); // a real game data load attempt first
   const scheduler = schedulerInfo();
@@ -54,7 +56,7 @@ async function readStatus(): Promise<StatusPayload> {
     riotKey: Boolean(env.riotApiKey),
     keyRejectedAt: lastKeyErrorAt(),
     database: Boolean(env.databaseUrl),
-    store: storeError ? `${store.describe()} — ${storeError}` : store.describe(),
+    store: storeError ? `${store.describe()} — unavailable (details in the server log)` : store.describe(),
     lastReport: report
       ? {
           ok: report.ok,

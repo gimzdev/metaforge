@@ -1,19 +1,18 @@
 'use client';
 
-import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Ban, Check, Plus, Search, X } from '@/components/icons';
 import { AugmentIcon, ChampionIcon, ItemIcon, TraitBadge, TraitHex } from '@/components/game/entities';
 import { GameImage } from '@/components/game/game-image';
 import { Popover } from '@/components/ui-client';
 import { costColor, currentIndex, styleFor, type StaticIndex } from '@/lib/static';
-import { ITEM_CATEGORY_LABEL, type ItemCategory, type ItemLite } from '@/lib/static/types';
+import { ITEM_CATEGORY_LABEL, type ItemCategory } from '@/lib/static/types';
 import { filterKey } from '@/lib/stats/filters';
 import type { Filter } from '@/lib/stats/types';
 import { cn } from '@/lib/utils';
 
 const EQUIPMENT: ItemCategory[] = ['completed', 'emblem', 'artifact', 'radiant', 'support', 'component'];
 
-/* ── Describing a filter ────────────────────────────────── */
 export function describeFilter(f: Filter, index: StaticIndex): { icon: ReactNode; name: string; detail: string } {
   switch (f.k) {
     case 'unit': {
@@ -21,37 +20,32 @@ export function describeFilter(f: Filter, index: StaticIndex): { icon: ReactNode
       const parts: string[] = [];
       if (f.stars?.length) parts.push(`${f.stars.join('/')}★`);
       if (f.items?.length) parts.push(f.items.map((i) => index.item(i)?.name ?? i).join(' + '));
-      else if (f.minItems) parts.push(`${f.minItems}+ items`);
-      return {
-        icon: <ChampionIcon id={f.id} size="xs" link={false} hover={false} />,
-        name: c?.name ?? f.id,
-        detail: parts.join(', '),
-      };
+      // Boards need max(minItems, items asked for) items on the unit: show the count whenever it asks for more.
+      if (f.minItems && f.minItems > (f.items?.length ?? 0)) parts.push(`${f.minItems}+ items`);
+      return { icon: <ChampionIcon id={f.id} size="xs" link={false} hover={false} />, name: c?.name ?? f.id, detail: parts.join(', ') };
     }
-    case 'item': {
-      const i = index.item(f.id);
+    case 'item':
       return {
         icon: <ItemIcon id={f.id} px={20} link={false} hover={false} />,
-        name: i?.name ?? f.id,
+        name: index.item(f.id)?.name ?? f.id,
         detail: f.min && f.min > 1 ? `${f.min}+ copies` : '',
       };
-    }
     case 'trait': {
       const t = index.trait(f.id);
       const at = (tier?: number) => (tier ? (t?.effects[tier - 1]?.minUnits ?? tier) : undefined);
       const min = at(f.min);
       const max = at(f.max);
-      const detail = min && max && f.min === f.max ? `exactly ${min}` : min ? `${min}+` : 'active';
       return {
         icon: t ? <TraitHex trait={t} style={styleFor(t, f.min ?? t.effects.length)} px={22} /> : null,
         name: t?.name ?? f.id,
-        detail,
+        detail: min && max && f.min === f.max ? `exactly ${min}` : min ? `${min}+` : 'active',
       };
     }
     case 'aug':
       return { icon: <AugmentIcon id={f.id} px={20} />, name: index.augment(f.id)?.name ?? f.id, detail: '' };
     case 'level': {
-      const detail = f.min && f.max ? (f.min === f.max ? `${f.min}` : `${f.min}–${f.max}`) : f.min ? `${f.min}+` : `≤ ${f.max}`;
+      // Both bounds can be switched off in the editor ("any": the server then drops the filter).
+      const detail = f.min && f.max ? (f.min === f.max ? `${f.min}` : `${f.min}–${f.max}`) : f.min ? `${f.min}+` : f.max ? `≤ ${f.max}` : 'any';
       return {
         icon: <span className="grid size-5 place-items-center rounded-md bg-bark text-[10px] font-bold text-lichen">Lv</span>,
         name: 'Level',
@@ -61,18 +55,8 @@ export function describeFilter(f: Filter, index: StaticIndex): { icon: ReactNode
   }
 }
 
-/* ── Shared bits ────────────────────────────────────────── */
-function Toggle({
-  on,
-  onClick,
-  children,
-  tone = 'wisp',
-}: {
-  on: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  tone?: 'wisp' | 'bloom';
-}) {
+/** `on` is the pressed state, left out for plain buttons that only act. */
+function Toggle({ on, onClick, children, tone = 'wisp' }: { on?: boolean; onClick: () => void; children: ReactNode; tone?: 'wisp' | 'bloom' }) {
   return (
     <button
       type="button"
@@ -80,11 +64,7 @@ function Toggle({
       onClick={onClick}
       className={cn(
         'inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[13px] font-medium transition-colors',
-        on
-          ? tone === 'bloom'
-            ? 'border-bloom/50 bg-bloom/12 text-bloom'
-            : 'border-wisp/50 bg-wisp/12 text-wisp'
-          : 'border-line-strong text-lichen hover:border-lichen/35 hover:text-moon',
+        !on ? 'border-line-strong text-lichen hover:border-lichen/35 hover:text-moon' : tone === 'bloom' ? 'border-bloom/50 bg-bloom/12 text-bloom' : 'border-wisp/50 bg-wisp/12 text-wisp',
       )}
     >
       {children}
@@ -105,11 +85,7 @@ function ExcludeToggle({ filter, onChange }: { filter: Filter; onChange: (f: Fil
   return (
     <div className="flex items-center justify-between border-t hairline pt-3">
       <span className="text-xs text-lichen">{filter.not ? 'Boards without this' : 'Boards with this'}</span>
-      <Toggle
-        on={Boolean(filter.not)}
-        tone="bloom"
-        onClick={() => onChange({ ...filter, not: filter.not ? undefined : true } as Filter)}
-      >
+      <Toggle on={Boolean(filter.not)} tone="bloom" onClick={() => onChange({ ...filter, not: filter.not ? undefined : true } as Filter)}>
         <Ban className="size-3.5" aria-hidden />
         Exclude
       </Toggle>
@@ -121,9 +97,7 @@ function ItemGrid({ onPick, selected = [] }: { onPick: (id: string) => void; sel
   const index = currentIndex();
   const [q, setQ] = useState('');
   const groups = useMemo(() => {
-    const list = index.data.items.filter(
-      (i) => EQUIPMENT.includes(i.category) && (!q || i.name.toLowerCase().includes(q.toLowerCase())),
-    );
+    const list = index.data.items.filter((i) => EQUIPMENT.includes(i.category) && (!q || i.name.toLowerCase().includes(q.toLowerCase())));
     return EQUIPMENT.map((cat) => ({ cat, items: list.filter((i) => i.category === cat) })).filter((g) => g.items.length);
   }, [index, q]);
   return (
@@ -134,16 +108,13 @@ function ItemGrid({ onPick, selected = [] }: { onPick: (id: string) => void; sel
           <div key={g.cat}>
             <div className="mb-1.5 text-[11px] text-fog">{ITEM_CATEGORY_LABEL[g.cat]}</div>
             <div className="flex flex-wrap gap-1">
-              {g.items.map((i: ItemLite) => (
+              {g.items.map((i) => (
                 <button
                   key={i.key}
                   type="button"
                   title={i.name}
                   onClick={() => onPick(i.key)}
-                  className={cn(
-                    'rounded-md p-0.5 transition hover:bg-wisp/15',
-                    selected.includes(i.key) && 'bg-wisp/20 ring-1 ring-wisp/60',
-                  )}
+                  className={cn('rounded-md p-0.5 transition hover:bg-wisp/15', selected.includes(i.key) && 'bg-wisp/20 ring-1 ring-wisp/60')}
                 >
                   <GameImage src={i.icon} alt={i.name} className="size-8 rounded" />
                 </button>
@@ -157,28 +128,18 @@ function ItemGrid({ onPick, selected = [] }: { onPick: (id: string) => void; sel
   );
 }
 
-function SearchInput({
-  value,
-  onChange,
-  placeholder,
-  onKeyDown,
-  autoFocus,
-  large,
-}: {
+function SearchInput({ value, onChange, placeholder, onKeyDown, autoFocus, large, combobox }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
   autoFocus?: boolean;
   large?: boolean;
+  /** The list of matches the arrow keys move through while focus stays here (the ARIA combobox pattern). */
+  combobox?: { listId: string; open: boolean; activeId?: string };
 }) {
   return (
-    <label
-      className={cn(
-        'flex items-center gap-2 rounded-lg border border-line-strong bg-night/60 px-3 focus-within:border-lichen/45',
-        large ? 'h-11' : 'h-9',
-      )}
-    >
+    <label className={cn('flex items-center gap-2 rounded-lg border border-line-strong bg-night/60 px-3 focus-within:border-lichen/45', large ? 'h-11' : 'h-9')}>
       <Search className="size-4 text-fog" aria-hidden />
       <input
         value={value}
@@ -187,24 +148,21 @@ function SearchInput({
         autoFocus={autoFocus}
         placeholder={placeholder}
         aria-label={placeholder}
-        className={cn(
-          'min-w-0 flex-1 bg-transparent text-moon outline-none placeholder:text-fog',
-          large ? 'text-[15px]' : 'text-sm',
-        )}
+        {...(combobox && {
+          role: 'combobox',
+          'aria-autocomplete': 'list' as const,
+          'aria-expanded': combobox.open,
+          'aria-controls': combobox.open ? combobox.listId : undefined,
+          'aria-activedescendant': combobox.open ? combobox.activeId : undefined,
+        })}
+        className={cn('min-w-0 flex-1 bg-transparent text-moon outline-none placeholder:text-fog', large ? 'text-[15px]' : 'text-sm')}
       />
     </label>
   );
 }
 
-/* ── One search over every kind of filter ───────────────── */
 type HitKind = 'unit' | 'item' | 'trait' | 'aug';
-interface Hit {
-  kind: HitKind;
-  key: string;
-  name: string;
-  detail: string;
-  score: number;
-}
+interface Hit { kind: HitKind; key: string; name: string; detail: string; score: number }
 
 const KIND_LABEL: Record<HitKind, string> = { unit: 'Champions', item: 'Items', trait: 'Traits', aug: 'Augments' };
 
@@ -253,7 +211,6 @@ function HitIcon({ hit }: { hit: Hit }) {
   return <AugmentIcon id={hit.key} px={30} />;
 }
 
-/* ── Editors ────────────────────────────────────────────── */
 function UnitEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'unit' }>; onChange: (f: Filter) => void }) {
   const index = currentIndex();
   const [picking, setPicking] = useState(false);
@@ -283,9 +240,11 @@ function UnitEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'unit' 
             }}
             className="group relative rounded-md"
             title={`Remove ${index.item(it)?.name ?? it}`}
+            aria-label={`Remove ${index.item(it)?.name ?? it}`}
           >
             <ItemIcon id={it} px={32} link={false} hover={false} />
-            <span className="absolute -right-1 -top-1 hidden size-4 place-items-center rounded-full bg-bloom text-night group-hover:grid">
+            {/* Always shown on touch screens, which have no hover. */}
+            <span className="absolute -right-1 -top-1 hidden size-4 place-items-center rounded-full bg-bloom text-night group-hover:grid group-focus-visible:grid pointer-coarse:grid">
               <X className="size-3" />
             </span>
           </button>
@@ -314,13 +273,20 @@ function UnitEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'unit' 
           }}
         />
       )}
-      {!items.length && (
+      {/* The count still applies with items picked (that many in all) until they fill all three slots; counts already reached are left out. */}
+      {items.length < 3 && (
         <Row label="Item count">
-          {[undefined, 1, 2, 3].map((n) => (
-            <Toggle key={n ?? 0} on={filter.minItems === n} onClick={() => onChange({ ...filter, minItems: n })}>
-              {n ? `${n}+` : 'Any'}
-            </Toggle>
-          ))}
+          {[undefined, 1, 2, 3]
+            .filter((n) => !n || n > items.length)
+            .map((n) => (
+              <Toggle
+                key={n ?? 0}
+                on={n ? filter.minItems === n : !filter.minItems || filter.minItems <= items.length}
+                onClick={() => onChange({ ...filter, minItems: n })}
+              >
+                {n ? `${n}+` : 'Any'}
+              </Toggle>
+            ))}
         </Row>
       )}
       <ExcludeToggle filter={filter} onChange={onChange} />
@@ -370,9 +336,7 @@ function ItemEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'item' 
     <div className="space-y-4">
       <Row label="Copies on the board">
         {[1, 2, 3].map((n) => (
-          <Toggle key={n} on={(filter.min ?? 1) === n} onClick={() => onChange({ ...filter, min: n > 1 ? n : undefined })}>
-            {n}+
-          </Toggle>
+          <Toggle key={n} on={(filter.min ?? 1) === n} onClick={() => onChange({ ...filter, min: n > 1 ? n : undefined })}>{`${n}+`}</Toggle>
         ))}
       </Row>
       <ExcludeToggle filter={filter} onChange={onChange} />
@@ -384,16 +348,31 @@ function LevelEditor({ filter, onChange }: { filter: Extract<Filter, { k: 'level
   const levels = [5, 6, 7, 8, 9, 10];
   return (
     <div className="space-y-4">
+      {/* A bound picked past the other one moves that one along (the chip would otherwise read "9–7"). */}
       <Row label="At least">
         {levels.map((l) => (
-          <Toggle key={l} on={filter.min === l} onClick={() => onChange({ ...filter, min: filter.min === l ? undefined : l })}>
+          <Toggle
+            key={l}
+            on={filter.min === l}
+            onClick={() => {
+              const min = filter.min === l ? undefined : l;
+              onChange({ ...filter, min, max: min && filter.max && filter.max < min ? min : filter.max });
+            }}
+          >
             {l}
           </Toggle>
         ))}
       </Row>
       <Row label="At most">
         {levels.map((l) => (
-          <Toggle key={l} on={filter.max === l} onClick={() => onChange({ ...filter, max: filter.max === l ? undefined : l })}>
+          <Toggle
+            key={l}
+            on={filter.max === l}
+            onClick={() => {
+              const max = filter.max === l ? undefined : l;
+              onChange({ ...filter, max, min: max && filter.min && filter.min > max ? max : filter.min });
+            }}
+          >
             {l}
           </Toggle>
         ))}
@@ -418,14 +397,7 @@ function Editor({ filter, onChange }: { filter: Filter; onChange: (f: Filter) =>
   }
 }
 
-/* ── Chip ───────────────────────────────────────────────── */
-function FilterChip({
-  filter,
-  open,
-  onOpenChange,
-  onChange,
-  onRemove,
-}: {
+function FilterChip({ filter, open, onOpenChange, onChange, onRemove }: {
   filter: Filter;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -437,9 +409,10 @@ function FilterChip({
   const anchor = useRef<HTMLButtonElement>(null);
   return (
     <>
+      {/* Never wider than the bar: a long refinement ("Infinity Edge + Last Whisper + …") truncates on phones. */}
       <span
         className={cn(
-          'inline-flex h-10 items-center rounded-xl border pl-1.5 pr-1 transition-colors',
+          'inline-flex h-10 max-w-full items-center rounded-xl border pl-1.5 pr-1 transition-colors',
           filter.not ? 'border-bloom/40 bg-bloom/[0.07]' : 'border-line-strong bg-wisp/[0.06]',
           open && 'ring-2 ring-wisp/30',
         )}
@@ -450,19 +423,14 @@ function FilterChip({
           aria-haspopup="dialog"
           aria-expanded={open}
           onClick={() => onOpenChange(!open)}
-          className="flex h-full items-center gap-2 pl-1 pr-2 text-[13px]"
+          className="flex h-full min-w-0 items-center gap-2 pl-1 pr-2 text-[13px]"
         >
-          {filter.not && <span className="rounded bg-bloom/20 px-1.5 py-0.5 text-[10px] font-bold text-bloom">NOT</span>}
-          {d.icon}
-          <span className="font-medium text-moon">{d.name}</span>
-          {d.detail && <span className="text-lichen">{d.detail}</span>}
+          {filter.not && <span className="shrink-0 rounded bg-bloom/20 px-1.5 py-0.5 text-[10px] font-bold text-bloom">NOT</span>}
+          {d.icon && <span className="flex shrink-0">{d.icon}</span>}
+          <span className="shrink-0 font-medium text-moon">{d.name}</span>
+          {d.detail && <span className="min-w-0 truncate text-lichen">{d.detail}</span>}
         </button>
-        <button
-          type="button"
-          onClick={onRemove}
-          aria-label={`Remove ${d.name} filter`}
-          className="grid size-7 place-items-center rounded-lg text-lichen hover:bg-white/5 hover:text-moon"
-        >
+        <button type="button" onClick={onRemove} aria-label={`Remove ${d.name} filter`} className="grid size-7 shrink-0 place-items-center rounded-lg text-lichen hover:bg-white/5 hover:text-moon">
           <X className="size-3.5" />
         </button>
       </span>
@@ -477,7 +445,6 @@ function FilterChip({
   );
 }
 
-/* ── Adding filters ─────────────────────────────────────── */
 type PickTab = 'units' | 'traits' | 'items' | 'augments' | 'level';
 
 function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void; hasAugments: boolean; active: Set<string> }) {
@@ -499,28 +466,51 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
     ...(hasAugments ? [{ id: 'augments' as const, label: 'Augments' }] : []),
     { id: 'level', label: 'Level' },
   ];
-  const champs = index.data.champions.filter((c) => !needle || c.name.toLowerCase().includes(needle));
-  const traits = index.data.traits.filter((t) => !needle || t.name.toLowerCase().includes(needle));
-  const items = index.data.items.filter(
-    (i) => EQUIPMENT.includes(i.category) && (!needle || i.name.toLowerCase().includes(needle)),
-  );
-  const augments = index.data.augments.filter((a) => !needle || a.name.toLowerCase().includes(needle));
+  // The browse tabs show only while the search is empty.
+  const champs = index.data.champions;
+  const traits = index.data.traits;
+  const items = index.data.items.filter((i) => EQUIPMENT.includes(i.category));
+  const augments = index.data.augments;
 
-  const mark = (key: string) => (active.has(key) ? <Check className="absolute right-1 top-1 size-3 text-wisp" /> : null);
+  const mark = (key: string) =>
+    active.has(key) ? (
+      <>
+        <Check className="absolute right-1 top-1 size-3 text-wisp" />
+        <span className="sr-only"> (already filtered)</span>
+      </>
+    ) : null;
   const hits = useMemo(() => (needle ? searchAll(index, needle, hasAugments) : []), [index, needle, hasAugments]);
+  /** Matches in runs of one kind, each match keeping its place in `hits` (what the cursor counts). */
+  const groups = useMemo(() => {
+    const out: Array<{ kind: HitKind; hits: Array<{ hit: Hit; i: number }> }> = [];
+    hits.forEach((hit, i) => {
+      const last = out[out.length - 1];
+      if (last?.kind === hit.kind) last.hits.push({ hit, i });
+      else out.push({ kind: hit.kind, hits: [{ hit, i }] });
+    });
+    return out;
+  }, [hits]);
   const [cursor, setCursor] = useState(0);
+  const listId = useId();
+  const optionId = (i: number) => `${listId}-${i}`;
   const pick = (hit: Hit) => add({ k: hit.kind, id: hit.key } as Filter);
+  /** Focus stays in the search box, so the list is scrolled to keep the highlighted match in view. */
+  const moveTo = (i: number) => {
+    setCursor(i);
+    document.getElementById(optionId(i))?.scrollIntoView({ block: 'nearest' });
+  };
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (!hits.length) return;
+    const at = Math.min(cursor, hits.length - 1);
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setCursor((c) => Math.min(hits.length - 1, c + 1));
+      moveTo(Math.min(hits.length - 1, at + 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setCursor((c) => Math.max(0, c - 1));
+      moveTo(Math.max(0, at - 1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      pick(hits[Math.min(cursor, hits.length - 1)]);
+      pick(hits[at]);
     }
   };
 
@@ -548,37 +538,48 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
           placeholder="Search champions, items, traits, augments"
           autoFocus
           large
+          combobox={{ listId, open: hits.length > 0, activeId: optionId(Math.min(cursor, hits.length - 1)) }}
         />
         {needle ? (
-          <div className="mt-3 max-h-[360px] overflow-y-auto pr-1 scroll-thin" role="listbox" aria-label="Matches">
-            {hits.length === 0 && <div className="py-8 text-center text-xs text-fog">Nothing matches “{q}”.</div>}
-            {hits.map((hit, i) => (
-              <div key={`${hit.kind}:${hit.key}`}>
-                {(i === 0 || hits[i - 1].kind !== hit.kind) && (
-                  <div className="eyebrow px-2 pb-1 pt-2.5 text-[10px] text-fog">{KIND_LABEL[hit.kind]}</div>
-                )}
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={i === cursor}
-                  onMouseEnter={() => setCursor(i)}
-                  onClick={() => pick(hit)}
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left',
-                    i === cursor ? 'bg-white/[0.06] text-moon' : 'text-lichen',
-                  )}
-                >
-                  <HitIcon hit={hit} />
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{hit.name}</span>
-                  <span className="shrink-0 text-xs text-fog">{hit.detail}</span>
-                  {active.has(`${hit.kind}:${hit.key}`) && (
-                    <Check className="size-3.5 shrink-0 text-wisp" aria-label="Already filtered" />
-                  )}
-                </button>
-              </div>
-            ))}
-            {hits.length > 0 && (
-              <div className="px-2 pt-2 text-[11px] text-fog">Enter adds the highlighted match. Arrows move.</div>
+          <div className="mt-3 max-h-[360px] overflow-y-auto pr-1 scroll-thin">
+            {hits.length === 0 ? (
+              <div className="py-8 text-center text-xs text-fog">Nothing matches “{q}”.</div>
+            ) : (
+              <>
+                <div id={listId} role="listbox" aria-label="Matches">
+                  {groups.map((g) => (
+                    <div key={g.kind} role="group" aria-label={KIND_LABEL[g.kind]}>
+                      <div className="eyebrow px-2 pb-1 pt-2.5 text-[10px] text-fog" aria-hidden>
+                        {KIND_LABEL[g.kind]}
+                      </div>
+                      {g.hits.map(({ hit, i }) => {
+                        const already = active.has(`${hit.kind}:${hit.key}`);
+                        return (
+                          // Options are picked with the arrows and Enter from the search box, or clicked: not tab stops.
+                          <button
+                            key={`${hit.kind}:${hit.key}`}
+                            id={optionId(i)}
+                            type="button"
+                            role="option"
+                            tabIndex={-1}
+                            aria-selected={i === cursor}
+                            aria-label={`${hit.name}, ${hit.detail}${already ? ', already filtered' : ''}`}
+                            onMouseEnter={() => setCursor(i)}
+                            onClick={() => pick(hit)}
+                            className={cn('flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left', i === cursor ? 'bg-white/[0.06] text-moon' : 'text-lichen')}
+                          >
+                            <HitIcon hit={hit} />
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{hit.name}</span>
+                            <span className="shrink-0 text-xs text-fog">{hit.detail}</span>
+                            {already && <Check className="size-3.5 shrink-0 text-wisp" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+                <div className="px-2 pt-2 text-[11px] text-fog">Enter adds the highlighted match. Arrows move.</div>
+              </>
             )}
           </div>
         ) : (
@@ -588,11 +589,9 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
                 <button
                   key={t.id}
                   type="button"
+                  aria-pressed={tab === t.id}
                   onClick={() => setTab(t.id)}
-                  className={cn(
-                    'h-8 shrink-0 rounded-lg px-3 text-[13px] font-medium',
-                    tab === t.id ? 'bg-bark text-moon' : 'text-lichen hover:text-moon',
-                  )}
+                  className={cn('h-8 shrink-0 rounded-lg px-3 text-[13px] font-medium', tab === t.id ? 'bg-bark text-moon' : 'text-lichen hover:text-moon')}
                 >
                   {t.label}
                 </button>
@@ -651,13 +650,7 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
                       <div className="mb-1.5 text-[11px] text-fog">{ITEM_CATEGORY_LABEL[cat]}</div>
                       <div className="flex flex-wrap gap-1">
                         {list.map((i) => (
-                          <button
-                            key={i.key}
-                            type="button"
-                            title={i.name}
-                            onClick={() => add({ k: 'item', id: i.key })}
-                            className="relative rounded-md p-0.5 hover:bg-wisp/15"
-                          >
+                          <button key={i.key} type="button" title={i.name} onClick={() => add({ k: 'item', id: i.key })} className="relative rounded-md p-0.5 hover:bg-wisp/15">
                             <GameImage src={i.icon} alt={i.name} className="size-9 rounded" />
                             {mark(`item:${i.key}`)}
                           </button>
@@ -673,10 +666,11 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
                       key={a.key}
                       type="button"
                       onClick={() => add({ k: 'aug', id: a.key })}
-                      className="flex items-center gap-2 rounded-lg p-2 text-left text-[13px] hover:bg-white/5"
+                      className="relative flex items-center gap-2 rounded-lg p-2 text-left text-[13px] hover:bg-white/5"
                     >
                       <GameImage src={a.icon} alt={a.name} className="size-7 rounded-md" />
                       <span className="truncate">{a.name}</span>
+                      {mark(`aug:${a.key}`)}
                     </button>
                   ))}
                 </div>
@@ -686,23 +680,17 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
                   <p className="text-xs text-lichen">Player level at the end of the game.</p>
                   <div className="flex flex-wrap gap-1.5">
                     {[7, 8, 9, 10].map((l) => (
-                      <Toggle key={l} on={false} onClick={() => add({ k: 'level', min: l, max: l })}>
+                      <Toggle key={l} onClick={() => add({ k: 'level', min: l, max: l })}>
                         Level {l}
                       </Toggle>
                     ))}
-                    <Toggle on={false} onClick={() => add({ k: 'level', min: 9 })}>
-                      9 or higher
-                    </Toggle>
+                    <Toggle onClick={() => add({ k: 'level', min: 9 })}>9 or higher</Toggle>
                   </div>
                 </div>
               )}
-              {tab !== 'level' &&
-                ((tab === 'units' && !champs.length) ||
-                  (tab === 'traits' && !traits.length) ||
-                  (tab === 'items' && !items.length) ||
-                  (tab === 'augments' && !augments.length)) && (
-                  <div className="py-8 text-center text-xs text-fog">Nothing matches “{q}”.</div>
-                )}
+              {tab !== 'level' && !{ units: champs, traits, items, augments }[tab].length && (
+                <div className="py-8 text-center text-xs text-fog">Nothing to pick from here.</div>
+              )}
             </div>
           </>
         )}
@@ -711,17 +699,7 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
   );
 }
 
-export function FilterBar({
-  filters,
-  editing,
-  setEditing,
-  onAdd,
-  onUpdate,
-  onRemove,
-  onClear,
-  hasAugments,
-  trailing,
-}: {
+export function FilterBar({ filters, editing, setEditing, onAdd, onUpdate, onRemove, onClear, hasAugments, trailing }: {
   filters: Filter[];
   editing: string | null;
   setEditing: (key: string | null) => void;
@@ -752,9 +730,11 @@ export function FilterBar({
         hasAugments={hasAugments}
         active={active}
         onAdd={(f) => {
-          onAdd(f);
-          // Open the editor right away when there is something to refine.
-          if (f.k === 'unit' || f.k === 'trait') setTimeout(() => setEditing(filterKey(f)), 60);
+          const key = filterKey(f);
+          // Picking one already set opens it (re-adding would drop its stars, items or NOT); a new level pick replaces the level.
+          const existing = f.k !== 'level' && active.has(key);
+          if (!existing) onAdd(f);
+          if (existing || f.k === 'unit' || f.k === 'trait') setTimeout(() => setEditing(key), 60);
         }}
       />
       {filters.length > 0 && (

@@ -30,10 +30,7 @@ export function singleton<T>(key: string, create: () => T): T {
   return bag[key] as T;
 }
 
-/**
- * Memoize an async loader: concurrent callers share one in-flight promise and
- * results are reused until the TTL expires. Failures are not cached.
- */
+/** Memoize an async loader (concurrent callers share one promise); failures are not cached. */
 export function cachedAsync<T>(key: string, ttlMs: number, load: () => Promise<T>): Promise<T> {
   const store = singleton('async-cache', () => ({ values: new TtlCache<unknown>(200), inflight: new Map<string, Promise<unknown>>() }));
   const hit = store.values.get(key);
@@ -41,10 +38,7 @@ export function cachedAsync<T>(key: string, ttlMs: number, load: () => Promise<T
   let pending = store.inflight.get(key) as Promise<T> | undefined;
   if (!pending) {
     pending = load()
-      .then((value) => {
-        store.values.set(key, value, ttlMs);
-        return value;
-      })
+      .then((value) => (store.values.set(key, value, ttlMs), value))
       .finally(() => store.inflight.delete(key));
     store.inflight.set(key, pending);
   }

@@ -33,7 +33,7 @@ export async function NoData({ error }: { error?: string | null }) {
             <div className="text-sm">
               <div className="font-semibold">{hasKey ? 'Riot API key configured' : 'RIOT_API_KEY missing'}</div>
               <div className="mt-0.5 text-lichen">
-                {hasKey ? 'Development keys expire every 24 hours.' : 'Add it to .env.local and restart.'}
+                {hasKey ? 'Development keys expire every 24 hours; production keys do not.' : 'Add it to .env.local and restart.'}
               </div>
             </div>
           </li>

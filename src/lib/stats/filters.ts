@@ -4,13 +4,18 @@ import type { Filter } from './types';
 /** Validation and URL encoding for explorer filters. Safe on server and client. */
 
 const MAX_FILTERS = 16;
+/** Raw entries looked at, per request and per list inside a filter: input is untrusted and can be huge. */
+const MAX_SCAN = 64;
 const KEY_RE = /^[a-z0-9_.:{}-]{1,96}$/;
 
-/** A champion, item, trait or augment key as filters take it (lowercase api name), or null. */
+/**
+ * A champion, item, trait or augment key as filters take it (lowercase api name), or null. Names that
+ * every object has ("constructor", "__proto__") are refused: results are looked up by key in plain objects.
+ */
 export function cleanKey(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const k = value.trim().toLowerCase();
-  return KEY_RE.test(k) ? k : null;
+  return KEY_RE.test(k) && !(k in Object.prototype) ? k : null;
 }
 
 function intIn(value: unknown, min: number, max: number): number | undefined {
@@ -27,10 +32,10 @@ function sanitizeFilter(raw: unknown): Filter | null {
       const id = cleanKey(f.id);
       if (!id) return null;
       const stars = Array.isArray(f.stars)
-        ? [...new Set(f.stars.map((s) => intIn(s, 1, 4)).filter((s): s is number => s !== undefined))].sort()
+        ? [...new Set(f.stars.slice(0, MAX_SCAN).map((s) => intIn(s, 1, 4)).filter((s): s is number => s !== undefined))].sort()
         : [];
       const items = Array.isArray(f.items)
-        ? f.items.map(cleanKey).filter((i): i is string => Boolean(i)).slice(0, 3)
+        ? f.items.slice(0, MAX_SCAN).map((i) => cleanKey(i)).filter((i): i is string => Boolean(i)).slice(0, 3)
         : [];
       const minItems = intIn(f.minItems, 1, 3);
       return {
@@ -76,10 +81,11 @@ export function sanitizeFilters(raw: unknown): Filter[] {
   if (!Array.isArray(raw)) return [];
   const out: Filter[] = [];
   const seen = new Set<string>();
-  for (const f of raw) {
+  for (const f of raw.slice(0, MAX_SCAN)) {
     const clean = sanitizeFilter(f);
     if (!clean) continue;
-    const sig = JSON.stringify(clean);
+    // One condition per champion, item, trait, augment and level, as the explorer's chips edit them.
+    const sig = filterKey(clean);
     if (seen.has(sig)) continue;
     seen.add(sig);
     out.push(clean);

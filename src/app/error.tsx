@@ -3,7 +3,8 @@
 import { useEffect } from 'react';
 import { TriangleAlert } from '@/components/icons';
 
-export default function ErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+// retry() fetches the page from the server again; reset() would only re-render the payload that failed.
+export default function ErrorPage({ error, retry }: { error: Error & { digest?: string }; retry: () => void }) {
   useEffect(() => {
     console.error(error);
   }, [error]);
@@ -17,11 +18,7 @@ export default function ErrorPage({ error, reset }: { error: Error & { digest?: 
         </p>
       </div>
       <div className="flex justify-center gap-2">
-        <button
-          type="button"
-          onClick={reset}
-          className="inline-flex h-10 items-center rounded-lg bg-wisp px-5 text-sm font-semibold text-[#1b1306] hover:bg-[#ecc57c]"
-        >
+        <button type="button" onClick={retry} className="inline-flex h-10 items-center rounded-lg bg-wisp px-5 text-sm font-semibold text-[#1b1306] hover:bg-[#ecc57c]">
           Try again
         </button>
         <a href="/" className="inline-flex h-10 items-center rounded-lg border border-line-strong px-5 text-sm font-medium text-lichen hover:text-moon">

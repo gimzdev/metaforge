@@ -27,6 +27,8 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   return {
     title: t.name,
     description: `${t.name} breakpoints, champions, and comps in TFT with results from ranked games.`,
+    // The page also answers to api names and loose spellings; the slug is the address to index.
+    alternates: { canonical: `/traits/${t.slug}` },
   };
 }
 
@@ -134,9 +136,7 @@ export default async function TraitPage({ params, searchParams }: { params: Para
         <section className="space-y-4">
           <h2 className="text-xl font-semibold tracking-tight">{trait.name} comps</h2>
           <div className="space-y-2.5">
-            {stats.comps.slice(0, 6).map((comp) => (
-              <CompRowCard key={comp.id} comp={comp} showGrade />
-            ))}
+            {stats.comps.slice(0, 6).map((comp) => <CompRowCard key={comp.id} comp={comp} showGrade />)}
           </div>
         </section>
       )}

@@ -1,10 +1,7 @@
 import type { CompRow, StatRow, Tier, TieredComp, TieredRow, TopUnit } from './types';
 
-/**
- * Letter grades from a Bayesian-shrunk average placement: small samples are
- * pulled toward the 4.5 lobby average so a lucky handful of games can't top
- * the list.
- */
+// Letter grades from a Bayesian-shrunk average placement: small samples are pulled toward the 4.5 lobby average
+// so a lucky handful of games can't top the list.
 const PRIOR = 4.5;
 const PRIOR_WEIGHT = 25;
 
@@ -20,13 +17,7 @@ export function minSample(totalBoards: number, share = 0.004, floor = 10) {
 export function gradeRows<R extends Pick<StatRow, 'n' | 'avg'> = StatRow>(rows: R[], minN: number): Array<R & Pick<TieredRow, 'score' | 'grade'>> {
   const scored = rows.map((r) => ({ ...r, score: shrunkAvg(r.avg, r.n), grade: null as Tier | null }));
   const eligible = scored.filter((r) => r.n >= minN).sort((a, b) => a.score - b.score);
-  const cuts: Array<[Tier, number]> = [
-    ['S', 0.12],
-    ['A', 0.35],
-    ['B', 0.65],
-    ['C', 0.85],
-    ['D', 1],
-  ];
+  const cuts: Array<[Tier, number]> = [['S', 0.12], ['A', 0.35], ['B', 0.65], ['C', 0.85], ['D', 1]];
   eligible.forEach((r, i) => {
     const q = eligible.length === 1 ? 0 : i / (eligible.length - 1);
     r.grade = cuts.find(([, c]) => q <= c)?.[0] ?? 'D';
@@ -39,10 +30,7 @@ export function gradeComps(comps: CompRow[], minN: number): TieredComp[] {
   return comps
     .map((c) => {
       const score = shrunkAvg(c.avg, c.n);
-      let grade: Tier | null = null;
-      if (c.n >= minN) {
-        grade = score <= 4.0 ? 'S' : score <= 4.25 ? 'A' : score <= 4.5 ? 'B' : score <= 4.75 ? 'C' : 'D';
-      }
+      const grade: Tier | null = c.n < minN ? null : score <= 4.0 ? 'S' : score <= 4.25 ? 'A' : score <= 4.5 ? 'B' : score <= 4.75 ? 'C' : 'D';
       return { ...c, score, grade };
     })
     .sort((a, b) => (a.grade === null ? 1 : 0) - (b.grade === null ? 1 : 0) || a.score - b.score);
@@ -76,20 +64,12 @@ export function highlights(rows: StatRow[], minN: number): Highlight[] {
 }
 
 /**
- * Standout units across every cost. Raw average placement favours legendaries, which mostly show
- * up on late boards that were already winning, so each champion is judged at each star level
- * against the other champions of the same cost at that star level: a 3-star 1-cost against other
- * 3-star 1-costs, a 2-star 4-cost against other 2-star 4-costs, a legendary against legendaries.
- * Only the forms players build toward count: cheap units at 3 stars (reroll), 3 and 4-costs at
- * 2 stars or more, legendaries at any star level. The ones that beat their peers the most, and
- * also place well outright, make the list; each champion appears once, at its strongest form.
+ * Standout units across every cost. Raw average placement favours legendaries (late boards that were already winning),
+ * so each champion at each star level is judged against the others of the same cost and star level, counting only the
+ * forms players build toward (see TARGET_STAR). Those beating their peers most while placing well outright make the
+ * list, each champion once at its strongest form.
  */
-export function topUnits(
-  forms: StatRow[],
-  champion: (key: string) => { cost: number; family: string } | null,
-  minN: number,
-  count = 6,
-): TopUnit[] {
+export function topUnits(forms: StatRow[], champion: (key: string) => { cost: number; family: string } | null, minN: number, count = 6): TopUnit[] {
   const parsed = forms.flatMap((r) => {
     const cut = r.id.lastIndexOf(':');
     const key = r.id.slice(0, cut);

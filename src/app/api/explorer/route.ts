@@ -9,9 +9,16 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   const blocked = limited(req, 'explorer', 240, 'Too many requests. Slow down a little.');
   if (blocked) return blocked;
+  // A filter set is a few hundred bytes; refuse far bigger bodies before parsing.
+  const MAX_BODY = 16_384;
+  if (Number(req.headers.get('content-length') ?? 0) > MAX_BODY) return NextResponse.json({ error: 'Request too large' }, { status: 413 });
   let body: Record<string, unknown>;
   try {
-    body = (await req.json()) as Record<string, unknown>;
+    const text = await req.text();
+    if (text.length > MAX_BODY) return NextResponse.json({ error: 'Request too large' }, { status: 413 });
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+    body = parsed as Record<string, unknown>;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }

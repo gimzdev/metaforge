@@ -3,17 +3,15 @@
 function str(...names: string[]): string {
   for (const name of names) {
     const value = process.env[name];
-    if (value && value.trim() && !/^(changeme|your[-_ ].*|<.*>)$/i.test(value.trim())) {
-      return value.trim();
-    }
+    if (value && value.trim() && !/^(changeme|your[-_ ].*|<.*>)$/i.test(value.trim())) return value.trim();
   }
   return '';
 }
 
 function int(name: string, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER): number {
-  const raw = Number(process.env[name]);
-  if (!Number.isFinite(raw)) return fallback;
-  return Math.min(max, Math.max(min, Math.round(raw)));
+  // Blank means the default (Number('') is 0: "RETAIN_DAYS=" must not mean "keep forever").
+  const raw = Number(process.env[name]?.trim() || NaN);
+  return Number.isFinite(raw) ? Math.min(max, Math.max(min, Math.round(raw))) : fallback;
 }
 
 export const env = {
@@ -27,11 +25,11 @@ export const env = {
   get databasePoolMax() {
     return int('DATABASE_POOL_MAX', process.env.VERCEL ? 2 : 6, 1, 50);
   },
+  /** Public address, no trailing slash; a bare host gets https://, and Vercel without APP_URL uses its production domain. */
   get appUrl() {
-    return (str('APP_URL', 'NEXT_PUBLIC_BASE_URL', 'NEXT_PUBLIC_APP_URL') || 'http://localhost:3000').replace(
-      /\/+$/,
-      '',
-    );
+    const vercel = process.env.VERCEL ? str('VERCEL_PROJECT_PRODUCTION_URL', 'VERCEL_URL') : '';
+    const url = str('APP_URL', 'NEXT_PUBLIC_BASE_URL', 'NEXT_PUBLIC_APP_URL') || (vercel ? `https://${vercel}` : 'http://localhost:3000');
+    return (/^https?:\/\//i.test(url) ? url : `https://${url}`).replace(/\/+$/, '');
   },
   get cronSecret() {
     return str('CRON_SECRET');
@@ -63,25 +61,32 @@ export const env = {
   get ingestMatchesPerRegion() {
     return int('INGEST_MATCHES_PER_REGION', 40, 1, 5000);
   },
-  /** Stored matches older than this many days are deleted after each collection run (0 keeps everything). */
+  /** 0 keeps everything. */
   get retainDays() {
     return int('RETAIN_DAYS', 30, 0, 3650);
+  },
+  /** Directory pages per region and run; off without a database (local files would hold millions of players in memory). */
+  get crawlPages() {
+    return this.databaseUrl ? int('CRAWL_PAGES', 200, 0, 200) : 0;
+  },
+  /** Share of the collection budget (%) kept for the player directory crawl. */
+  get crawlShare() {
+    return int('CRAWL_SHARE', 50, 0, 90);
+  },
+  /** Riot IDs looked up per run by the directory crawl. */
+  get crawlNames() {
+    return int('CRAWL_NAMES', 20000, 0, 20000);
   },
   get ingestBudgetSeconds() {
     return int('INGEST_BUDGET_SECONDS', process.env.VERCEL ? 270 : 900, 10, 3600);
   },
-  /**
-   * Where Riot API calls go. "{host}" is replaced with the routing value (na1,
-   * americas, ...). Point it at a caching proxy if you run one.
-   */
+  /** "{host}" becomes the routing value (na1, americas, ...); can point at a caching proxy. */
   get riotApiBase() {
     return (str('RIOT_API_BASE_URL') || 'https://{host}.api.riotgames.com').replace(/\/+$/, '');
   },
   get riotRateLimits(): Array<[number, number]> {
     const raw = str('RIOT_RATE_LIMITS') || '20:1,100:120';
-    const pairs = raw
-      .split(',')
-      .map((p) => p.split(':').map(Number))
+    const pairs = raw.split(',').map((p) => p.split(':').map(Number))
       .filter(([n, s]) => Number.isFinite(n) && Number.isFinite(s) && n > 0 && s > 0)
       .map(([n, s]) => [n, s * 1000] as [number, number]);
     return pairs.length ? pairs : [[20, 1000], [100, 120_000]];
@@ -92,7 +97,7 @@ export const env = {
   get staticDataUrl() {
     return str('STATIC_DATA_URL') || 'https://raw.communitydragon.org/latest/cdragon/tft/en_us.json';
   },
-  /** Load static game data from a local CDragon-format JSON file instead of the network. */
+  /** A local CDragon-format JSON file instead of the network. */
   get staticDataFile() {
     return str('STATIC_DATA_FILE');
   },

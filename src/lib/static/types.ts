@@ -1,8 +1,5 @@
-/**
- * Normalized game data. The server keeps the full data; pages get the "lite"
- * part (everything but descriptions) and browsers fetch the descriptions once,
- * cached (see /api/static). References between entities use lowercase keys.
- */
+// Normalized game data. The server keeps it all; pages get the "lite" part (no descriptions) and browsers fetch the
+// descriptions once, cached (see /api/static). References between entities use lowercase keys.
 
 export type TraitStyle = 'inactive' | 'bronze' | 'silver' | 'gold' | 'prismatic' | 'unique';
 
@@ -14,15 +11,7 @@ export interface RichSeg {
 }
 export type RichText = RichSeg[];
 
-export type ItemCategory =
-  | 'component'
-  | 'completed'
-  | 'emblem'
-  | 'artifact'
-  | 'radiant'
-  | 'support'
-  | 'consumable'
-  | 'special';
+export type ItemCategory = 'component' | 'completed' | 'emblem' | 'artifact' | 'radiant' | 'support' | 'consumable' | 'special';
 
 export interface ChampionLite {
   key: string;
@@ -127,12 +116,6 @@ export interface StaticText {
 }
 
 export const ITEM_CATEGORY_LABEL: Record<ItemCategory, string> = {
-  component: 'Components',
-  completed: 'Completed',
-  emblem: 'Emblems',
-  artifact: 'Artifacts',
-  radiant: 'Radiant',
-  support: 'Support',
-  consumable: 'Consumables',
-  special: 'Special',
+  component: 'Components', completed: 'Completed', emblem: 'Emblems', artifact: 'Artifacts',
+  radiant: 'Radiant', support: 'Support', consumable: 'Consumables', special: 'Special',
 };

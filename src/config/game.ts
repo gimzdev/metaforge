@@ -1,16 +1,13 @@
-/**
- * Game calendar and set-specific rules.
- *
- * Everything that changes when Riot ships a patch or a new set lives here, so
- * keeping MetaForge current is a one-file edit. Champion, trait and item data
- * itself is pulled live from CommunityDragon and never needs manual updates.
- */
+// Game calendar and set-specific rules: everything that changes when Riot ships a patch or a new set, so keeping MetaForge
+// current is a one-file edit. Champion, trait and item data is pulled live from CommunityDragon.
 
 interface PatchWindow {
   /** Label players know the patch by, e.g. "18.3b". */
   label: string;
   /** UTC date the patch reached live servers (YYYY-MM-DD). */
   start: string;
+  /** The hour it went live (UTC ISO time) when it is known; matches before it still belong to the previous patch. Defaults to 00:00 on `start`. */
+  at?: string;
   /** True for scheduled dates that have not been confirmed by patch notes yet. */
   tentative?: boolean;
 }
@@ -42,7 +39,12 @@ const SETS: Record<number, SetInfo> = {
       { label: '18.2b', start: '2026-09-14' },
       { label: '18.3', start: '2026-09-23' },
       { label: '18.3b', start: '2026-09-24' },
-      { label: '18.4', start: '2026-10-07', tentative: true },
+      // Riot's patch day is 2026-10-07 (Pacific time); the go-live hour is an estimate (10:00 PT). Set it to the hour your
+      // matches switch to the new version if you need it exact.
+      { label: '18.4', start: '2026-10-07', at: '2026-10-07T17:00:00Z' },
+      // Riot dates the 18.4 B-patch October 7 (Pacific time); it rolled out on PC first. The go-live hour is an estimate
+      // (about 4 PM PT, after the 18.4 launch). Set it to the hour your matches switch to the new version if you need it exact.
+      { label: '18.4b', start: '2026-10-07', at: '2026-10-07T23:00:00Z' },
       { label: '18.5', start: '2026-10-21', tentative: true },
       { label: '18.6', start: '2026-11-04', tentative: true },
       { label: '18.6b', start: '2026-11-11', tentative: true },
@@ -53,10 +55,7 @@ const SETS: Record<number, SetInfo> = {
 /** The set MetaForge targets. Override with TFT_SET=<number> if CDragon moves ahead. */
 const DEFAULT_SET = 18;
 
-/**
- * Board-building rules for the current set, used by the team builder. Trait
- * names are display names as they appear in-game.
- */
+/** Board-building rules for the current set (team builder). Trait names are display names as they appear in-game. */
 export const SET_RULES = {
   /** Champions with this trait count each of their other traits twice. */
   doubleTraitHolder: 'Avatar',
@@ -69,16 +68,8 @@ export const SET_RULES = {
 } as const;
 
 export const QUEUES: Record<number, string> = {
-  1090: 'Normal',
-  1100: 'Ranked',
-  1130: 'Hyper Roll',
-  1160: 'Double Up',
-  1210: "Choncc's Treasure",
-  1220: "Tocker's Trials",
-  6000: 'Revival',
-  6100: 'Revival',
-  6110: 'Revival',
-  6120: "Pengu's Party",
+  1090: 'Normal', 1100: 'Ranked', 1130: 'Hyper Roll', 1160: 'Double Up', 1210: "Choncc's Treasure",
+  1220: "Tocker's Trials", 6000: 'Revival', 6100: 'Revival', 6110: 'Revival', 6120: "Pengu's Party",
 };
 
 export const RANKED_QUEUE = 1100;
@@ -86,16 +77,8 @@ export const RANKED_QUEUE = 1100;
 const DAY = 86_400_000;
 
 export function getSetInfo(setNumber: number): SetInfo {
-  return (
-    SETS[setNumber] ?? {
-      number: setNumber,
-      name: `Set ${setNumber}`,
-      mutator: `TFTSet${setNumber}`,
-      start: new Date(Date.now() - 60 * DAY).toISOString().slice(0, 10),
-      origins: [],
-      patches: [],
-    }
-  );
+  const start = new Date(Date.now() - 60 * DAY).toISOString().slice(0, 10);
+  return SETS[setNumber] ?? { number: setNumber, name: `Set ${setNumber}`, mutator: `TFTSet${setNumber}`, start, origins: [], patches: [] };
 }
 
 export function configuredSetNumber(): number {
@@ -114,15 +97,11 @@ export interface ResolvedPatch {
 export function patchWindows(setNumber: number, now = Date.now()): ResolvedPatch[] {
   const info = getSetInfo(setNumber);
   const started = info.patches
-    .map((p) => ({ ...p, t: Date.parse(`${p.start}T00:00:00Z`) }))
+    .map((p) => ({ ...p, t: Date.parse(p.at ?? `${p.start}T00:00:00Z`) }))
     .filter((p) => Number.isFinite(p.t) && p.t <= now)
     .sort((a, b) => a.t - b.t);
-  return started.map((p, i) => ({
-    label: p.label,
-    start: p.t,
-    end: i + 1 < started.length ? started[i + 1].t : Number.POSITIVE_INFINITY,
-    tentative: Boolean(p.tentative),
-  }));
+  const end = (i: number) => (i + 1 < started.length ? started[i + 1].t : Number.POSITIVE_INFINITY);
+  return started.map((p, i) => ({ label: p.label, start: p.t, end: end(i), tentative: Boolean(p.tentative) }));
 }
 
 export function currentPatch(setNumber: number, now = Date.now()): ResolvedPatch | null {

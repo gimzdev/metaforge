@@ -2,15 +2,10 @@ import { getSetInfo } from '@/config/game';
 import { slugify } from '@/lib/utils';
 import { emblemToken } from './index';
 import { inferCalcValues, mapLookup, renderRich, splitTraitDescription } from './text';
-import type { Augment, Champion, Item, ItemCategory, StaticData, Trait, TraitStyle } from './types';
+import type { Augment, Champion, ChampionStats, Item, ItemCategory, StaticData, Trait, TraitStyle } from './types';
 
 /* Raw CommunityDragon shapes (only the fields read here). */
-interface RawAbility {
-  name?: string;
-  desc?: string;
-  icon?: string;
-  variables?: Array<{ name?: string; value?: number[] | number }>;
-}
+type RawAbility = { name?: string; desc?: string; icon?: string; variables?: Array<{ name?: string; value?: number[] | number }> };
 interface RawChampion {
   apiName: string;
   name?: string;
@@ -43,14 +38,7 @@ interface RawItem {
   isAugment?: boolean;
   tier?: number | string;
 }
-interface RawSet {
-  number?: number;
-  mutator?: string;
-  champions?: RawChampion[];
-  traits?: RawTrait[];
-  items?: string[];
-  augments?: string[];
-}
+type RawSet = { number?: number; mutator?: string; champions?: RawChampion[]; traits?: RawTrait[]; items?: string[]; augments?: string[] };
 export interface RawCdragon {
   items?: RawItem[];
   setData?: RawSet[];
@@ -79,14 +67,9 @@ function selectSet(raw: RawCdragon, wanted: number): RawSet {
   if (!all.length) throw new Error('CommunityDragon data contains no sets');
   const standard = all.filter((s) => !SPECIAL_MODE.test(s.mutator ?? ''));
   const pool = standard.length ? standard : all;
+  const inexact = (s: RawSet, n: number) => Number(s.mutator !== `TFTSet${n}`);
   const pick = (n: number) =>
-    pool
-      .filter((s) => s.number === n)
-      .sort(
-        (a, b) =>
-          Number(a.mutator !== `TFTSet${n}`) - Number(b.mutator !== `TFTSet${n}`) ||
-          (a.mutator ?? '').length - (b.mutator ?? '').length,
-      )[0];
+    pool.filter((s) => s.number === n).sort((a, b) => inexact(a, n) - inexact(b, n) || (a.mutator ?? '').length - (b.mutator ?? '').length)[0];
   return pick(wanted) ?? pick(Math.max(...pool.map((s) => s.number ?? 0)));
 }
 
@@ -112,11 +95,7 @@ function uniqueSlugger() {
   const used = new Set<string>();
   return (base: string, fallback: string) => {
     let slug = slugify(base) || slugify(fallback) || 'x';
-    if (used.has(slug)) {
-      let i = 2;
-      while (used.has(`${slug}-${i}`)) i++;
-      slug = `${slug}-${i}`;
-    }
+    for (let i = 2, root = slug; used.has(slug); i++) slug = `${root}-${i}`;
     used.add(slug);
     return slug;
   };
@@ -148,11 +127,9 @@ function augmentTier(item: RawItem): Augment['tier'] {
 }
 
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const STAT_KEYS = ['hp', 'mana', 'initialMana', 'damage', 'armor', 'magicResist', 'attackSpeed', 'critChance', 'range'] as const;
 
-/**
- * Where each champion wants to stand. Most roles are blank in the catalog, so besides
- * the role, short-range units much sturdier than their cost tier's average are tanks.
- */
+/** Where each champion stands. Most catalog roles are blank, so short-range units much sturdier than their cost's average are tanks too. */
 function assignRows(champions: Champion[]) {
   const dur = (c: Champion) => (c.stats.hp ?? 0) * (1 + (c.stats.armor ?? 0) / 100);
   const sums = new Map<number, { total: number; n: number }>();
@@ -203,10 +180,7 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
         effects: effectsRaw.map((e, i) => ({
           minUnits: e.minUnits,
           style: styles[i] ?? 'bronze',
-          desc: renderRich(
-            expand ?? rows[i] ?? rows[rows.length - 1] ?? '',
-            mapLookup(e.variables, { MinUnits: e.minUnits, MaxUnits: e.maxUnits }),
-          ),
+          desc: renderRich(expand ?? rows[i] ?? rows[rows.length - 1] ?? '', mapLookup(e.variables, { MinUnits: e.minUnits, MaxUnits: e.maxUnits })),
         })),
         champions: [],
         kind: 'trait',
@@ -237,16 +211,12 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
       let name = baseName;
       if (siblings.length > 1) {
         // Forms of one champion (Lux the Avatar) are told apart by the trait only they have.
-        const shared = siblings
-          .map((s) => new Set(s.traits ?? []))
-          .reduce((acc, cur) => new Set([...acc].filter((x) => cur.has(x))));
+        const shared = siblings.map((s) => new Set(s.traits ?? [])).reduce((acc, cur) => new Set([...acc].filter((x) => cur.has(x))));
         const suffix = (c.traits ?? []).find((t) => !shared.has(t)) ?? /_(AP|AD|[A-Za-z]+)$/.exec(c.apiName)?.[1] ?? c.apiName;
         name = `${baseName} (${suffix})`;
       }
       const vars = new Map<string, number[] | number>();
-      for (const v of c.ability?.variables ?? []) {
-        if (v?.name && v.value !== undefined) vars.set(v.name.toLowerCase(), v.value as number[] | number);
-      }
+      for (const v of c.ability?.variables ?? []) if (v?.name && v.value !== undefined) vars.set(v.name.toLowerCase(), v.value as number[] | number);
       const calcs = inferCalcValues(c.ability?.desc ?? '', c.ability?.variables);
       const stats = c.stats ?? {};
       return {
@@ -266,17 +236,7 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
           icon: assetPath(c.ability?.icon),
           desc: renderRich(c.ability?.desc ?? '', (n) => calcs.get(n.toLowerCase()) ?? vars.get(n.toLowerCase())),
         },
-        stats: {
-          hp: num(stats.hp),
-          mana: num(stats.mana),
-          initialMana: num(stats.initialMana),
-          damage: num(stats.damage),
-          armor: num(stats.armor),
-          magicResist: num(stats.magicResist),
-          attackSpeed: num(stats.attackSpeed),
-          critChance: num(stats.critChance),
-          range: num(stats.range),
-        },
+        stats: Object.fromEntries(STAT_KEYS.map((k) => [k, num(stats[k])])) as unknown as ChampionStats,
       } satisfies Champion;
     })
     .sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name));
@@ -285,14 +245,7 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
   for (const champion of champions) for (const key of champion.traits) traitByKey.get(key)?.champions.push(champion.key);
   for (const trait of traits) {
     const maxMin = Math.max(0, ...trait.effects.map((e) => e.minUnits));
-    trait.kind =
-      trait.effects.length > 0 && maxMin <= 1
-        ? 'unique'
-        : origins.size
-          ? origins.has(trait.name.toLowerCase())
-            ? 'origin'
-            : 'class'
-          : 'trait';
+    trait.kind = trait.effects.length > 0 && maxMin <= 1 ? 'unique' : !origins.size ? 'trait' : origins.has(trait.name.toLowerCase()) ? 'origin' : 'class';
   }
 
   /* ── items & augments ───────────────────────────────────── */
@@ -341,15 +294,13 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
 }
 
 /**
- * One catalog entry per item. Set 18 mirrors most items under a "DA_" id (the
- * Wisp shop's copies, without descriptions); the standard id wins and the
- * others become aliases so their games count toward it. Wisp-only effects and
- * the temporary Phantom Emblem are dropped, and emblems get their trait.
+ * One catalog entry per item. Set 18 mirrors most items under a "DA_" id (the Wisp shop's copies, without descriptions);
+ * the standard id wins and the others become aliases so their games count toward it. Wisp-only effects and the temporary
+ * Phantom Emblem are dropped, and emblems get their trait.
  */
 function dedupeItems(items: Item[], traits: Trait[]) {
   const aliases: Record<string, string> = {};
-  const rank = (i: Item) =>
-    (i.key.startsWith('da_') ? 0 : 4) + (i.desc.length ? 2 : 0) - (/(upgrade|augment|_hr$|charm)/.test(i.key) ? 3 : 0);
+  const rank = (i: Item) => (i.key.startsWith('da_') ? 0 : 4) + (i.desc.length ? 2 : 0) - (/(upgrade|augment|_hr$|charm)/.test(i.key) ? 3 : 0);
   const keep = new Map<string, Item>();
   for (const item of items) {
     if (/phantomemblem/.test(item.key) || /^phantom emblem$/i.test(item.name)) continue;
@@ -360,14 +311,11 @@ function dedupeItems(items: Item[], traits: Trait[]) {
     }
     const group = `${item.category}|${item.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const current = keep.get(group);
-    if (!current) {
-      keep.set(group, item);
-    } else if (rank(item) > rank(current)) {
+    if (!current) keep.set(group, item);
+    else if (rank(item) > rank(current)) {
       keep.set(group, item);
       aliases[current.key] = item.key;
-    } else {
-      aliases[item.key] = current.key;
-    }
+    } else aliases[item.key] = current.key;
   }
   const catalog = [...keep.values()];
   // Point alias chains at the final survivor.
@@ -378,9 +326,7 @@ function dedupeItems(items: Item[], traits: Trait[]) {
     aliases[from] = to;
   }
   // Recipes may name mirrored components (DA_Component_Spatula): point them at the catalog.
-  for (const item of catalog) {
-    item.composition = item.composition.map((c) => (live.has(aliases[c] ?? c) ? (aliases[c] ?? c) : c));
-  }
+  for (const item of catalog) item.composition = item.composition.map((c) => (live.has(aliases[c] ?? c) ? (aliases[c] ?? c) : c));
   // Emblems: attach the trait (by name first, then by the id's trait word) and describe them.
   const traitByName = new Map(traits.map((t) => [t.name.toLowerCase(), t]));
   const traitByToken = new Map(traits.map((t) => [t.key.replace(/^.*?_(\d+_)?/, '').replace(/[^a-z0-9]/g, ''), t]));

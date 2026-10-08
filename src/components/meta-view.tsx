@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { ArrowDownRight, ArrowUpRight, Crown, Flame, Medal, Sprout, Trophy } from '@/components/icons';
 import { ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
+import { BoardPreview } from '@/components/game/board-preview';
 import { GameImage } from '@/components/game/game-image';
 import { AvgPlace, CompRowCard, GRADE_TEXT } from '@/components/stats/bits';
 import { ScopeBar } from '@/components/stats/table';
@@ -16,13 +17,7 @@ import type { Tier, TieredComp } from '@/lib/stats/types';
 import { cn, fmt, traitOf } from '@/lib/utils';
 
 const GRADES: Tier[] = ['S', 'A', 'B', 'C', 'D'];
-const GRADE_BG: Record<Tier, string> = {
-  S: 'bg-tier-s/12',
-  A: 'bg-tier-a/12',
-  B: 'bg-tier-b/12',
-  C: 'bg-tier-c/12',
-  D: 'bg-tier-d/12',
-};
+const GRADE_BG: Record<Tier, string> = { S: 'bg-tier-s/12', A: 'bg-tier-a/12', B: 'bg-tier-b/12', C: 'bg-tier-c/12', D: 'bg-tier-d/12' };
 const GRADE_BLURB: Record<Tier, string> = {
   S: 'Best results this patch',
   A: 'Reliable top 4',
@@ -39,35 +34,38 @@ const ITEM_KINDS: Array<{ id: ItemCategory; label: string }> = [
   { id: 'radiant', label: 'Radiant' },
 ];
 
-function Tile({ kind, row }: { kind: ListKind; row: TierRow }) {
+/** Name and page of a tier-list or standout entry; undefined when the static data does not know it. */
+function entry(kind: ListKind, id: string, tier?: number): { name: string; href?: string } | undefined {
   const index = currentIndex();
-  let icon: ReactNode = null;
-  let href: string | undefined;
-  let name = row.id;
   if (kind === 'units') {
-    const c = index.champion(row.id);
-    if (!c) return null;
-    name = c.name;
-    href = `/units/${c.slug}`;
-    icon = <ChampionIcon id={row.id} size="lg" link={false} />;
-  } else if (kind === 'items') {
-    const it = index.item(row.id);
-    if (!it) return null;
-    name = it.name;
-    href = `/items/${it.slug}`;
-    icon = <ItemIcon id={row.id} px={52} link={false} />;
-  } else if (kind === 'traits') {
-    const key = traitOf(row.id);
-    const t = index.trait(key);
-    if (!t) return null;
-    name = `${t.effects[(row.tier ?? 1) - 1]?.minUnits ?? ''} ${t.name}`.trim();
-    href = `/traits/${t.slug}`;
-    icon = <TraitBadge id={key} tier={row.tier} size={48} link={false} showCount={false} />;
-  } else {
-    const a = index.augment(row.id);
-    name = a?.name ?? row.id;
-    icon = <GameImage src={a?.icon} alt={name} className="size-[52px] rounded-xl" />;
+    const c = index.champion(id);
+    return c && { name: c.name, href: `/units/${c.slug}` };
   }
+  if (kind === 'items') {
+    const it = index.item(id);
+    return it && { name: it.name, href: `/items/${it.slug}` };
+  }
+  if (kind === 'traits') {
+    const t = index.trait(traitOf(id));
+    return t && { name: `${t.effects[(tier ?? 1) - 1]?.minUnits ?? ''} ${t.name}`.trim(), href: `/traits/${t.slug}` };
+  }
+  return { name: index.augment(id)?.name ?? id };
+}
+
+function Tile({ kind, row }: { kind: ListKind; row: TierRow }) {
+  const e = entry(kind, row.id, row.tier);
+  if (!e) return null;
+  const { name, href } = e;
+  const icon =
+    kind === 'units' ? (
+      <ChampionIcon id={row.id} size="lg" link={false} />
+    ) : kind === 'items' ? (
+      <ItemIcon id={row.id} px={52} link={false} />
+    ) : kind === 'traits' ? (
+      <TraitBadge id={traitOf(row.id)} tier={row.tier} size={48} link={false} showCount={false} />
+    ) : (
+      <GameImage src={currentIndex().augment(row.id)?.icon} alt={name} className="size-[52px] rounded-xl" />
+    );
   const body = (
     <>
       {icon}
@@ -108,9 +106,7 @@ function TierList({ kind, rows }: { kind: ListKind; rows: TierRow[] }) {
               <span className="hidden px-2 text-center text-[10px] leading-tight text-lichen sm:block">{GRADE_BLURB[g]}</span>
             </div>
             <div className="flex flex-1 flex-wrap gap-0.5 p-2">
-              {list.map((r) => (
-                <Tile key={r.id} kind={kind} row={r} />
-              ))}
+              {list.map((r) => <Tile key={r.id} kind={kind} row={r} />)}
             </div>
           </div>
         );
@@ -128,30 +124,19 @@ const HIGHLIGHT_META: Record<Highlight['kind'], { label: string; icon: typeof Cr
 };
 
 function HighlightCard({ h, kind }: { h: Highlight; kind: 'units' | 'items' | 'traits' }) {
-  const index = currentIndex();
   const meta = HIGHLIGHT_META[h.kind];
-  let icon: ReactNode = null;
-  let name = h.id;
-  let href = '#';
-  if (kind === 'units') {
-    const c = index.champion(h.id);
-    name = c?.name ?? h.id;
-    href = c ? `/units/${c.slug}` : '#';
-    icon = <ChampionIcon id={h.id} size="md" link={false} hover={false} />;
-  } else if (kind === 'items') {
-    const it = index.item(h.id);
-    name = it?.name ?? h.id;
-    href = it ? `/items/${it.slug}` : '#';
-    icon = <ItemIcon id={h.id} px={40} link={false} hover={false} />;
-  } else {
-    const key = traitOf(h.id);
-    const t = index.trait(key);
-    name = t ? `${t.effects[(h.row.tier ?? 1) - 1]?.minUnits ?? ''} ${t.name}`.trim() : h.id;
-    href = t ? `/traits/${t.slug}` : '#';
-    icon = <TraitBadge id={key} tier={h.row.tier} size={38} link={false} hover={false} showCount={false} />;
-  }
+  const e = entry(kind, h.id, h.row.tier);
+  const name = e?.name ?? h.id;
+  const icon =
+    kind === 'units' ? (
+      <ChampionIcon id={h.id} size="md" link={false} hover={false} />
+    ) : kind === 'items' ? (
+      <ItemIcon id={h.id} px={40} link={false} hover={false} />
+    ) : (
+      <TraitBadge id={traitOf(h.id)} tier={h.row.tier} size={38} link={false} hover={false} showCount={false} />
+    );
   return (
-    <Link href={href} className="surface flex items-center gap-3 rounded-xl p-3.5 transition-colors hover:border-lichen/40">
+    <Link href={e?.href ?? '#'} className="surface flex items-center gap-3 rounded-xl p-3.5 transition-colors hover:border-lichen/40">
       {icon}
       <div className="min-w-0">
         <div className="flex items-center gap-1.5 text-[11px] text-lichen">
@@ -165,13 +150,9 @@ function HighlightCard({ h, kind }: { h: Highlight; kind: 'units' | 'items' | 't
   );
 }
 
-function Trends({ trends, previous, current }: { trends: Record<string, number>; previous: string; current: string }) {
+function TrendList({ list, up }: { list: Array<[string, number]>; up: boolean }) {
   const index = currentIndex();
-  const entries = Object.entries(trends).filter(([id]) => index.champion(id));
-  const rising = [...entries].sort((a, b) => a[1] - b[1]).filter(([, d]) => d < -0.05).slice(0, 6);
-  const falling = [...entries].sort((a, b) => b[1] - a[1]).filter(([, d]) => d > 0.05).slice(0, 6);
-  if (!rising.length && !falling.length) return null;
-  const List = ({ list, up }: { list: Array<[string, number]>; up: boolean }) => (
+  return (
     <div className="surface rounded-xl p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
         {up ? <ArrowUpRight className="size-4 text-good" /> : <ArrowDownRight className="size-4 text-bloom" />}
@@ -197,17 +178,23 @@ function Trends({ trends, previous, current }: { trends: Record<string, number>;
       </ul>
     </div>
   );
+}
+
+function Trends({ trends, previous, current }: { trends: Record<string, number>; previous: string; current: string }) {
+  const index = currentIndex();
+  const entries = Object.entries(trends).filter(([id]) => index.champion(id));
+  const rising = [...entries].sort((a, b) => a[1] - b[1]).filter(([, d]) => d < -0.05).slice(0, 6);
+  const falling = [...entries].sort((a, b) => b[1] - a[1]).filter(([, d]) => d > 0.05).slice(0, 6);
+  if (!rising.length && !falling.length) return null;
   return (
     <section className="space-y-3">
       <div>
         <h2 className="text-xl font-semibold tracking-tight">Since patch {previous}</h2>
-        <p className="mt-1 text-sm text-lichen">
-          Change in average placement from {previous} to {current}. Negative numbers mean better finishes.
-        </p>
+        <p className="mt-1 text-sm text-lichen">Change in average placement from {previous} to {current}. Negative numbers mean better finishes.</p>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <List list={rising} up />
-        <List list={falling} up={false} />
+        <TrendList list={rising} up />
+        <TrendList list={falling} up={false} />
       </div>
     </section>
   );
@@ -215,6 +202,14 @@ function Trends({ trends, previous, current }: { trends: Record<string, number>;
 
 export function MetaView({ data }: { data: MetaViewData }) {
   const [showAllComps, setShowAllComps] = useState(false);
+  // Comps whose row shows the recommended board instead of the stats.
+  const [boards, setBoards] = useState<Set<string>>(() => new Set());
+  const toggleBoard = (id: string) =>
+    setBoards((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const [list, setList] = useState<ListKind>('units');
   const [itemKind, setItemKind] = useState<ItemCategory>('completed');
   const [highlightKind, setHighlightKind] = useState<'units' | 'items' | 'traits'>('units');
@@ -224,10 +219,10 @@ export function MetaView({ data }: { data: MetaViewData }) {
   const topGrades = graded.filter((c) => c.grade === 'S' || c.grade === 'A' || c.grade === 'B');
   const shownComps: TieredComp[] = showAllComps ? graded : topGrades.length >= 4 ? topGrades : graded.slice(0, 8);
 
-  const itemRows = useMemo(() => {
-    const rows = data.items.filter((r) => index.item(r.id)?.category === itemKind);
-    return gradeRows(rows, itemMinSample(data.minN));
-  }, [data.items, data.minN, index, itemKind]);
+  const itemRows = useMemo(
+    () => gradeRows(data.items.filter((r) => index.item(r.id)?.category === itemKind), itemMinSample(data.minN)),
+    [data.items, data.minN, index, itemKind],
+  );
 
   const rows: Record<ListKind, TierRow[]> = {
     units: data.units,
@@ -261,7 +256,12 @@ export function MetaView({ data }: { data: MetaViewData }) {
                     <span className="h-px flex-1 self-center bg-line" />
                   </div>
                   {group.map((c) => (
-                    <CompRowCard key={c.id} comp={c} />
+                    <CompRowCard
+                      key={c.id}
+                      comp={c}
+                      board={boards.has(c.id) ? <BoardPreview units={c.units} px={40} /> : undefined}
+                      onToggleBoard={() => toggleBoard(c.id)}
+                    />
                   ))}
                 </div>
               );
@@ -271,6 +271,7 @@ export function MetaView({ data }: { data: MetaViewData }) {
         {graded.length > shownComps.length || showAllComps ? (
           <button
             type="button"
+            aria-expanded={showAllComps}
             onClick={() => setShowAllComps((s) => !s)}
             className="w-full rounded-xl border hairline py-3 text-sm font-medium text-lichen hover:bg-white/[0.03] hover:text-moon"
           >
@@ -283,9 +284,7 @@ export function MetaView({ data }: { data: MetaViewData }) {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold tracking-tight">Tier lists</h2>
-            <p className="mt-1 text-sm text-lichen">
-              Graded against each other. Items are graded within their own category.
-            </p>
+            <p className="mt-1 text-sm text-lichen">Graded against each other. Items are graded within their own category.</p>
           </div>
           <Segmented
             value={list}
@@ -325,9 +324,7 @@ export function MetaView({ data }: { data: MetaViewData }) {
           />
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {data.highlights[highlightKind].map((h) => (
-            <HighlightCard key={`${h.kind}-${h.id}`} h={h} kind={highlightKind} />
-          ))}
+          {data.highlights[highlightKind].map((h) => <HighlightCard key={`${h.kind}-${h.id}`} h={h} kind={highlightKind} />)}
         </div>
       </section>
 

@@ -4,13 +4,7 @@ import { singleton, TtlCache } from '@/lib/cache';
 import { RiotError } from '@/lib/riot/api';
 import { normalizePlatform } from '@/lib/riot/regions';
 
-/** Helpers shared by the route handlers. */
-
-/**
- * Fixed-window limiter for public endpoints that cost Riot calls or heavy work. Per server instance,
- * which is enough to keep one client from draining the shared Riot rate limit. Answers the 429 to send
- * when over the limit, otherwise null.
- */
+/** Per-instance fixed-window limiter (enough to stop one client draining the Riot limit): the 429 to send, or null. */
 export function limited(req: Request, name: string, limit: number, message = 'Too many requests. Try again in a moment.') {
   const client = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'local';
   const buckets = singleton('rate-limit', () => new TtlCache<{ n: number; reset: number }>(5000, 10 * 60_000));
@@ -34,17 +28,16 @@ export function playerQuery(req: NextRequest) {
   return { q, puuid, platform };
 }
 
-/** The error response for a failed request (Riot's rate limit and key errors keep their meaning). */
+const RIOT_STATUS: Partial<Record<RiotError['code'], number>> = { rate: 429, key: 503, config: 503, budget: 503, not_found: 404, bad_request: 400 };
+
+/** Riot errors keep their message; anything else (DB errors can name hosts and users) is logged and answered with `fallback`. */
 export function failure(error: unknown, fallback: string) {
-  const status = error instanceof RiotError ? (error.code === 'rate' ? 429 : error.code === 'key' ? 503 : 502) : 500;
-  return NextResponse.json({ error: error instanceof Error ? error.message : fallback }, { status });
+  if (error instanceof RiotError) return NextResponse.json({ error: error.message }, { status: RIOT_STATUS[error.code] ?? 502 });
+  console.error(`[metaforge] ${fallback}:`, error);
+  return NextResponse.json({ error: fallback }, { status: 500 });
 }
 
-/**
- * A JSON response, gzipped when the client takes gzip: Next compresses pages but not route handlers,
- * and explorer results and game text are large and very repetitive. Pass `body` to reuse a
- * serialization (and its compressed form) across requests.
- */
+/** JSON, gzipped when accepted (Next does not compress route handlers); `body` reuses a serialization across requests. */
 export function json(req: Request, data: unknown, init: { status?: number; headers?: Record<string, string>; body?: { text: string; gzip?: Buffer } } = {}) {
   const body = init.body ?? { text: JSON.stringify(data) };
   const headers = new Headers(init.headers);

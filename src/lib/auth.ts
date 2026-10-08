@@ -28,9 +28,8 @@ function verifySession(value: string | undefined | null): Session | null {
   if (!value || !env.sessionSecret) return null;
   const [body, sig] = value.split('.');
   if (!body || !sig) return null;
-  const expected = hmac(body);
   const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
+  const b = Buffer.from(hmac(body));
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
   try {
     const s = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Session;
@@ -41,17 +40,17 @@ function verifySession(value: string | undefined | null): Session | null {
 }
 
 export async function getSession(): Promise<Session | null> {
-  const jar = await cookies();
-  return verifySession(jar.get(SESSION_COOKIE)?.value);
+  return verifySession((await cookies()).get(SESSION_COOKIE)?.value);
 }
 
-export const sessionCookieOptions = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production' && env.appUrl.startsWith('https://'),
-  sameSite: 'lax' as const,
-  path: '/',
-  maxAge: MAX_AGE,
-};
+/** Secure whenever the site is served over https (always on Vercel, even if APP_URL was left at its default). */
+const secure =
+  process.env.NODE_ENV === 'production' && (env.onVercel || env.appUrl.startsWith('https://') || env.rsoRedirectUri.startsWith('https://'));
+
+export const sessionCookieOptions = { httpOnly: true, secure, sameSite: 'lax' as const, path: '/', maxAge: MAX_AGE };
+
+/** The sign-in state only has to last the round trip to Riot. */
+export const stateCookieOptions = { ...sessionCookieOptions, maxAge: 600 };
 
 export function randomState() {
   return crypto.randomBytes(24).toString('base64url');

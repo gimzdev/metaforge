@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Collection } from '@/components/collection';
 import { ChampionIcon } from '@/components/game/entities';
@@ -15,6 +16,8 @@ import { itemMinSample, type Highlight } from '@/lib/stats/tiers';
 import { fmt, traitOf } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = { alternates: { canonical: '/' } };
 
 const HIGHLIGHT_LABEL: Record<Highlight['kind'], string> = {
   best: 'Best average',
@@ -40,53 +43,32 @@ function highlightDetail(h: Highlight) {
   }
 }
 
+const card = (h: Highlight, kind: 'unit' | 'item' | 'trait', noun: string, e: { key: string; name: string; slug: string }): CarouselItem => ({
+  key: `${kind[0]}-${h.kind}`,
+  title: `${HIGHLIGHT_LABEL[h.kind]} ${noun}`,
+  kind,
+  entity: e.key,
+  name: e.name,
+  detail: highlightDetail(h),
+  href: `/${kind}s/${e.slug}`,
+});
+
 /** Highlight cards for the carousel, mixed across champions, items, traits and comps. */
 function carouselItems(data: MetaResult, index: StaticIndex<StaticData>): CarouselItem[] {
-  const units: CarouselItem[] = [];
-  for (const h of data.highlights.units) {
+  const units = data.highlights.units.flatMap((h) => {
     const c = index.champion(h.id);
-    if (c)
-      units.push({
-        key: `u-${h.kind}`,
-        title: `${HIGHLIGHT_LABEL[h.kind]} champion`,
-        kind: 'unit',
-        entity: c.key,
-        name: c.name,
-        detail: highlightDetail(h),
-        href: `/units/${c.slug}`,
-      });
-  }
-  const items: CarouselItem[] = [];
-  for (const h of data.highlights.items) {
+    return c ? [card(h, 'unit', 'champion', c)] : [];
+  });
+  const items = data.highlights.items.flatMap((h) => {
     const it = index.item(h.id);
-    if (it && it.category !== 'component') {
-      items.push({
-        key: `i-${h.kind}`,
-        title: `${HIGHLIGHT_LABEL[h.kind]} item`,
-        kind: 'item',
-        entity: it.key,
-        name: it.name,
-        detail: highlightDetail(h),
-        href: `/items/${it.slug}`,
-      });
-    }
-  }
-  const traits: CarouselItem[] = [];
-  for (const h of data.highlights.traits) {
+    return it && it.category !== 'component' ? [card(h, 'item', 'item', it)] : [];
+  });
+  const traits = data.highlights.traits.flatMap((h) => {
     const t = index.trait(traitOf(h.id));
-    if (!t) continue;
+    if (!t) return [];
     const units = t.effects[(h.row.tier ?? 1) - 1]?.minUnits;
-    traits.push({
-      key: `t-${h.kind}`,
-      title: `${HIGHLIGHT_LABEL[h.kind]} trait`,
-      kind: 'trait',
-      entity: t.key,
-      tier: h.row.tier,
-      name: `${units ?? ''} ${t.name}`.trim(),
-      detail: highlightDetail(h),
-      href: `/traits/${t.slug}`,
-    });
-  }
+    return [{ ...card(h, 'trait', 'trait', { ...t, name: `${units ?? ''} ${t.name}`.trim() }), tier: h.row.tier }];
+  });
   const comps: CarouselItem[] = data.comps
     .filter((c) => c.grade && c.carry)
     .slice(0, 4)
@@ -116,19 +98,15 @@ export default async function HomePage() {
   const index = indexStatic(staticData);
   const set = getSetInfo(staticData.set.number);
   const live = currentPatch(staticData.set.number)?.label ?? null;
-  const data = await getMeta({}).catch(() => null);
-  const hasData = Boolean(data && data.meta.total > 0);
-  const topComp = hasData && data ? data.comps.find((c) => c.grade) : undefined;
-  const graded = hasData && data ? data.comps.filter((c) => c.grade).length : 0;
-  const topUnits = hasData && data ? data.topUnits : [];
-  const stats =
-    hasData && data
-      ? { units: statMap(data.units, data.minN), items: statMap(data.items, itemMinSample(data.minN)) }
-      : null;
-  const scopeLabel = data && data.scope.patch !== 'all' ? `patch ${data.scope.patch}` : 'this set';
-  const carousel = hasData && data ? carouselItems(data, index) : [];
+  const meta = await getMeta({}).catch(() => null);
+  const data = meta && meta.meta.total > 0 ? meta : null;
+  const topComp = data?.comps.find((c) => c.grade);
+  const graded = data ? data.comps.filter((c) => c.grade).length : 0;
+  const topUnits = data?.topUnits ?? [];
+  const stats = data ? { units: statMap(data.units, data.minN), items: statMap(data.items, itemMinSample(data.minN)) } : null;
+  const scopeLabel = meta && meta.scope.patch !== 'all' ? `patch ${meta.scope.patch}` : 'this set';
+  const carousel = data ? carouselItems(data, index) : [];
   const collecting = ingestRunning();
-  const champions = staticData.champions.length;
   const guidesArt = brand.learn || brand.background;
   const ladderArt = brand.fight || brand.background;
 
@@ -138,9 +116,7 @@ export default async function HomePage() {
       <section className="-mt-10 grid min-h-[600px] grid-cols-1 items-center gap-12 pb-4 pt-14 sm:min-h-[660px] lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)] lg:gap-16 short:min-h-[min(660px,calc(100svh_-_211px))] short:pb-2 short:pt-8">
         <div className="max-w-2xl">
           <div className="eyebrow flex flex-wrap items-center gap-x-3 gap-y-1 text-wisp">
-            <span>
-              Set {set.number} · {set.name}
-            </span>
+            <span>Set {set.number} · {set.name}</span>
             {live && (
               <Link href="/news" className="text-moon/80 transition-colors hover:text-moon">
                 Patch {live}
@@ -158,7 +134,7 @@ export default async function HomePage() {
         </div>
 
         <aside className="rounded-xl border border-line bg-night/[0.78] p-6 sm:p-7 short:p-5">
-          {hasData && data ? (
+          {data ? (
             <>
               <div className="flex items-baseline justify-between gap-3">
                 <span className="eyebrow text-fog">This patch</span>
@@ -191,15 +167,10 @@ export default async function HomePage() {
                 </div>
               )}
               {topComp && (
-                <Link
-                  href={`/comps/${topComp.id}`}
-                  className="group mt-6 flex items-center justify-between gap-3 border-t border-line pt-5 short:mt-4 short:pt-4"
-                >
+                <Link href={`/comps/${topComp.id}`} className="group mt-6 flex items-center justify-between gap-3 border-t border-line pt-5 short:mt-4 short:pt-4">
                   <span className="min-w-0">
                     <span className="eyebrow block text-fog">Top comp</span>
-                    <span className="mt-1 block truncate text-[15px] font-medium text-moon group-hover:text-wisp">
-                      {topComp.name}
-                    </span>
+                    <span className="mt-1 block truncate text-[15px] font-medium text-moon group-hover:text-wisp">{topComp.name}</span>
                   </span>
                   <span className="num shrink-0 text-right">
                     <span className="block font-display text-[1.45rem] leading-none text-good">{fmt.place(topComp.avg)}</span>
@@ -248,14 +219,14 @@ export default async function HomePage() {
             href="/explorer"
             title="Stats explorer"
             description="Filter boards by champions, items, traits and level, and see how everything does on the boards that match."
-            detail={hasData && data ? `${fmt.int(data.meta.total)} boards to query` : undefined}
+            detail={data ? `${fmt.int(data.meta.total)} boards to query` : undefined}
           />
           <ToolColumn
             n="iii."
             href="/builder"
             title="Team builder"
             description="Drag champions onto the board, add items and emblems, and see which traits are active."
-            detail={`${champions} champions, share links built in`}
+            detail={`${staticData.champions.length} champions, share links built in`}
           />
         </div>
       </section>
@@ -264,7 +235,7 @@ export default async function HomePage() {
         <section>
           <SectionHead label="03 · Resources" title="More to explore" />
           <div className="grid gap-4 md:grid-cols-2">
-            {guidesArt ? (
+            {guidesArt && (
               <ImageTile
                 href="/guides"
                 art={guidesArt}
@@ -272,8 +243,8 @@ export default async function HomePage() {
                 title="Learn the set"
                 description="Fundamentals, the item chart, emblem recipes and how this set's mechanics work."
               />
-            ) : null}
-            {ladderArt ? (
+            )}
+            {ladderArt && (
               <ImageTile
                 href="/leaderboard"
                 art={ladderArt}
@@ -282,7 +253,7 @@ export default async function HomePage() {
                 description="Standings for every region, with each player's match history."
                 position="center 35%"
               />
-            ) : null}
+            )}
           </div>
         </section>
       )}

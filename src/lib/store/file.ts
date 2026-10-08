@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { env } from '@/lib/env';
-import { dedupePlayers, type BoardRecord, type MatchQuery, type MatchRecord, type PlayerRecord, type Store, type StoreStats, type StoredMatch } from './types';
+import { nameMatch } from '@/lib/utils';
+import { dedupePlayers, mergePlayer, type BoardRecord, type LpPoint, type LpSeen, type MatchQuery, type MatchRecord, type PlayerRecord, type Store, type StoreStats, type StoredMatch } from './types';
 
 /** Read just the match header of a stored line (the "m" object is always written first). */
 function parseHead(raw: string): MatchRecord | null {
@@ -23,17 +24,16 @@ function countBoards(raw: string): number {
 
 const emptyStats = (): StoreStats => ({ matches: 0, boards: 0, firstMatchAt: null, lastMatchAt: null });
 
-/**
- * Zero-setup store for local use: an append-only NDJSON file of matches plus small
- * JSON files for players and settings. Reads stream the file, so memory stays flat
- * however large it grows. Not for serverless deployments.
- */
+/** Local zero-setup store: append-only NDJSON matches plus JSON players/settings; reads stream. Not for serverless. */
 export class FileStore implements Store {
   kind = 'file' as const;
   private dir = path.resolve(env.dataDir);
   private matchesFile = path.join(this.dir, 'matches.ndjson');
   private playersFile = path.join(this.dir, 'players.json');
   private kvFile = path.join(this.dir, 'kv.json');
+  private lpFile = path.join(this.dir, 'lp.json');
+  private lp = new Map<string, LpPoint[]>();
+  private lpSave: Promise<void> | null = null;
   private ready: Promise<void> | null = null;
   private ids = new Set<string>();
   private summary = new Map<number, StoreStats>();
@@ -41,7 +41,12 @@ export class FileStore implements Store {
   /** Bytes of the matches file this process has indexed, including its own appends. */
   private indexedSize = 0;
   private players = new Map<string, PlayerRecord>();
+  /** Queued players.json write not yet started (it will include every change made until it does). */
+  private playersSave: Promise<void> | null = null;
   private kv: Record<string, unknown> = {};
+  /** Stamp of the kv.json this process last read or wrote; reread only when another process changed it. */
+  private kvStamp = '';
+  private tmpSeq = 0;
   private writeQueue: Promise<unknown> = Promise.resolve();
 
   describe() {
@@ -54,6 +59,7 @@ export class FileStore implements Store {
       await this.reindex();
       this.players = new Map(Object.entries(await this.readJson<Record<string, PlayerRecord>>(this.playersFile, {})));
       this.kv = await this.readJson<Record<string, unknown>>(this.kvFile, {});
+      this.lp = new Map(Object.entries(await this.readJson<Record<string, LpPoint[]>>(this.lpFile, {})));
     })().catch((error) => {
       this.ready = null;
       throw error;
@@ -76,6 +82,24 @@ export class FileStore implements Store {
     return run;
   }
 
+  private static stamp(st: { ino: number; size: number; mtimeMs: number }) {
+    return `${st.ino}:${st.size}:${st.mtimeMs}`;
+  }
+
+  /** Write via temp + rename so a crash never leaves a half-written file (it would read as empty, then be overwritten). */
+  private async writeAtomic(file: string, data: string | Buffer) {
+    const tmp = `${file}.${process.pid}-${++this.tmpSeq}.tmp`;
+    try {
+      await fs.writeFile(tmp, data);
+      const stamp = FileStore.stamp(await fs.stat(tmp)); // a rename keeps the inode and times
+      await fs.rename(tmp, file);
+      return stamp;
+    } catch (error) {
+      await fs.rm(tmp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
   private async fileStat() {
     try {
       const st = await fs.stat(this.matchesFile);
@@ -85,7 +109,6 @@ export class FileStore implements Store {
     }
   }
 
-  /** Up to `length` bytes of the matches file from `position` (none when it can't be read). */
   private async peek(position: number, length: number): Promise<Buffer> {
     try {
       const handle = await fs.open(this.matchesFile, 'r');
@@ -138,7 +161,6 @@ export class FileStore implements Store {
     }
   }
 
-  /** Rebuild the in-memory index of match ids and per-set counts from the file. */
   private async reindex() {
     const ids = new Set<string>();
     const summary = new Map<number, StoreStats>();
@@ -194,8 +216,7 @@ export class FileStore implements Store {
     await this.writeQueue;
     const st = await this.fileStat();
     if (!st) return { cursor: '', full: true };
-    // The cursor names the file (inode, creation time and a hash of its first line) and a byte offset
-    // just past a line. A rewritten file (pruning) or an offset that no longer lines up starts over.
+    // Cursor = file identity (inode, birth time, first-line hash) + offset past a line; a rewritten file or misaligned offset restarts.
     const head = await this.peek(0, 256);
     const firstLine = head.indexOf(10);
     const id = `${st.id}:${createHash('sha1').update(firstLine < 0 ? head : head.subarray(0, firstLine)).digest('hex').slice(0, 12)}`;
@@ -206,38 +227,29 @@ export class FileStore implements Store {
     const wanted = (m: MatchRecord | null): m is MatchRecord =>
       Boolean(m && m.boardsStored && m.setNumber === q.setNumber && m.queueId === q.queueId && m.datetime >= q.since);
     const deliver = (raw: string, m: MatchRecord) => {
+      let boards: BoardRecord[];
       try {
-        const { b } = JSON.parse(raw) as { b: BoardRecord[] };
-        onMatch({ matchId: m.matchId, platform: m.platform, datetime: m.datetime, boards: b });
+        boards = (JSON.parse(raw) as { b: BoardRecord[] }).b;
       } catch {
-        /* a damaged line: skip it */
+        return; // damaged line
       }
+      onMatch({ matchId: m.matchId, platform: m.platform, datetime: m.datetime, boards });
     };
-    // Everything fits the limit (the usual case): one pass.
+    const scan = (until: number, onHead: (m: MatchRecord | null, raw: string) => void) => this.eachLine(from, (raw) => onHead(parseHead(raw), raw), until);
     if ((this.summary.get(q.setNumber)?.boards ?? 0) <= q.limit) {
-      const end = await this.eachLine(
-        from,
-        (raw) => {
-          const m = parseHead(raw);
-          if (wanted(m)) deliver(raw, m);
-        },
-        st.size,
-      );
+      const end = await scan(st.size, (m, raw) => {
+        if (wanted(m)) deliver(raw, m);
+      });
       return { cursor: `${id}:${end}`, full: from === 0 };
     }
     // Pass 1: headers only, choosing the newest matches that fit the limit.
     const picks: Array<{ id: string; t: number; n: number }> = [];
     const seen = new Set<string>();
-    const end = await this.eachLine(
-      from,
-      (raw) => {
-        const m = parseHead(raw);
-        if (!m || seen.has(m.matchId)) return;
-        seen.add(m.matchId);
-        if (wanted(m)) picks.push({ id: m.matchId, t: m.datetime, n: countBoards(raw) });
-      },
-      st.size,
-    );
+    const end = await scan(st.size, (m, raw) => {
+      if (!m || seen.has(m.matchId)) return;
+      seen.add(m.matchId);
+      if (wanted(m)) picks.push({ id: m.matchId, t: m.datetime, n: countBoards(raw) });
+    });
     picks.sort((a, b) => b.t - a.t || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
     const chosen = new Set<string>();
     let planned = 0;
@@ -248,14 +260,9 @@ export class FileStore implements Store {
     }
     // Pass 2: parse only those.
     if (chosen.size) {
-      await this.eachLine(
-        from,
-        (raw) => {
-          const m = parseHead(raw);
-          if (m && chosen.delete(m.matchId)) deliver(raw, m);
-        },
-        end,
-      );
+      await scan(end, (m, raw) => {
+        if (m && chosen.delete(m.matchId)) deliver(raw, m);
+      });
     }
     return { cursor: `${id}:${end}`, full: from === 0 };
   }
@@ -266,7 +273,6 @@ export class FileStore implements Store {
     return st ? `${st.size}:${st.mtime}` : 'empty';
   }
 
-  /** Rewrite the matches file without games older than `before`. */
   async prune(before: number) {
     await this.init();
     await this.refreshIndex();
@@ -302,43 +308,121 @@ export class FileStore implements Store {
 
   async upsertPlayers(players: PlayerRecord[]) {
     await this.init();
-    for (const p of dedupePlayers(players)) {
-      const prev = this.players.get(p.puuid);
-      this.players.set(p.puuid, {
-        puuid: p.puuid,
-        gameName: p.gameName ?? prev?.gameName ?? null,
-        tagLine: p.tagLine ?? prev?.tagLine ?? null,
-        platform: p.platform ?? prev?.platform ?? null,
-        tier: p.tier ?? prev?.tier ?? null,
-        lp: p.lp ?? prev?.lp ?? null,
-        updatedAt: Date.now(),
-      });
-    }
-    const snapshot = JSON.stringify(Object.fromEntries(this.players));
-    await this.enqueue(() => fs.writeFile(this.playersFile, snapshot));
+    for (const p of dedupePlayers(players)) this.players.set(p.puuid, { ...mergePlayer(p, this.players.get(p.puuid)), updatedAt: Date.now() });
+    await this.savePlayers();
+  }
+
+  /** Coalesce writes: a crawl upserts players thousands of times and each write is the whole file. */
+  private savePlayers() {
+    this.playersSave ??= this.enqueue(async () => {
+      this.playersSave = null; // changes from here on need another write
+      await this.writeAtomic(this.playersFile, JSON.stringify(Object.fromEntries(this.players)));
+    });
+    return this.playersSave;
   }
 
   async getPlayers(puuids: string[]) {
     await this.init();
-    const out = new Map<string, PlayerRecord>();
-    for (const id of puuids) {
-      const p = this.players.get(id);
-      if (p) out.set(id, p);
+    return new Map(puuids.flatMap((id) => (this.players.has(id) ? [[id, this.players.get(id)!] as const] : [])));
+  }
+
+  async recordLp(seen: LpSeen[], track: boolean) {
+    await this.init();
+    const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+    let changed = false;
+    for (const p of seen) {
+      const points = this.lp.get(p.puuid);
+      if (!points && !track) continue;
+      const last = points?.at(-1);
+      if (last && last.tier === p.tier && last.division === p.division && last.lp === p.lp) continue;
+      const point = { at: hour, tier: p.tier, division: p.division, lp: Math.round(p.lp) };
+      const list = points ?? [];
+      if (last?.at === hour) list[list.length - 1] = point;
+      else list.push(point);
+      this.lp.set(p.puuid, list.slice(-1000));
+      changed = true;
     }
-    return out;
+    if (changed) await this.saveLp();
+  }
+
+  private saveLp() {
+    this.lpSave ??= this.enqueue(async () => {
+      this.lpSave = null;
+      await this.writeAtomic(this.lpFile, JSON.stringify(Object.fromEntries(this.lp)));
+    });
+    return this.lpSave;
+  }
+
+  async lpHistory(puuid: string, since: number) {
+    await this.init();
+    return (this.lp.get(puuid) ?? []).filter((p) => p.at >= since);
+  }
+
+  async pruneLp(before: number) {
+    await this.init();
+    let removed = 0;
+    for (const [puuid, points] of this.lp) {
+      const kept = points.filter((p) => p.at >= before);
+      removed += points.length - kept.length;
+      if (!kept.length) this.lp.delete(puuid);
+      else if (kept.length < points.length) this.lp.set(puuid, kept);
+    }
+    if (removed) await this.saveLp();
+    return removed;
+  }
+
+  async unnamedPlayers(limit: number) {
+    await this.init();
+    // As in Postgres: null name (empty marks an account Riot does not know) and a platform.
+    return [...this.players.values()]
+      .filter((p) => (p.gameName == null || p.tagLine == null) && p.platform)
+      .sort((a, b) => (b.lp ?? -1) - (a.lp ?? -1) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .slice(0, limit);
+  }
+
+  async searchPlayers(prefix: string, opts: { platform?: string; prefer?: string; limit?: number } = {}) {
+    await this.init();
+    const q = prefix.trim().toLowerCase();
+    if (!q) return [];
+    const limit = Math.max(1, Math.min(opts.limit ?? 8, 25));
+    const hits: Array<PlayerRecord & { rank: number }> = [];
+    for (const p of this.players.values()) {
+      if (!p.gameName || !p.tagLine || (opts.platform && p.platform !== opts.platform)) continue;
+      const rank = nameMatch(p.gameName, q);
+      if (rank >= 0) hits.push({ ...p, rank });
+    }
+    const preferred = (p: PlayerRecord) => Number(Boolean(opts.prefer) && p.platform === opts.prefer);
+    hits.sort(
+      (a, b) =>
+        a.rank - b.rank ||
+        preferred(b) - preferred(a) ||
+        (b.lp ?? -1) - (a.lp ?? -1) ||
+        (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+    );
+    return hits.slice(0, limit).map(({ rank, ...p }) => p);
   }
 
   async getKv<T>(key: string) {
     await this.init();
-    // Another process (npm run ingest) may have written a newer value.
     return ((await this.latestKv())[key] as T) ?? null;
   }
 
-  /** Settings are read, changed and written as one queued step, so concurrent writers never undo each other. */
+  /** Callers read-modify-write inside one queued step so concurrent writers never undo each other. */
   private async latestKv() {
-    const disk = await this.readJson<Record<string, unknown>>(this.kvFile, {});
-    this.kv = { ...this.kv, ...disk };
+    const st = await fs.stat(this.kvFile).catch(() => null);
+    const stamp = st ? FileStore.stamp(st) : '';
+    if (stamp !== this.kvStamp) {
+      const disk = await this.readJson<Record<string, unknown>>(this.kvFile, {});
+      this.kv = { ...this.kv, ...disk };
+      this.kvStamp = stamp;
+    }
     return this.kv;
+  }
+
+  /** Memory then matches the file exactly (a concurrent read may have swapped in an older copy). */
+  private async writeKv(all: Record<string, unknown>) {
+    this.kvStamp = await this.writeAtomic(this.kvFile, JSON.stringify(all));
+    this.kv = all;
   }
 
   async setKv(key: string, value: unknown) {
@@ -346,7 +430,7 @@ export class FileStore implements Store {
     await this.enqueue(async () => {
       const all = await this.latestKv();
       all[key] = value;
-      await fs.writeFile(this.kvFile, JSON.stringify(all));
+      await this.writeKv(all);
     });
   }
 
@@ -354,13 +438,43 @@ export class FileStore implements Store {
     await this.init();
     return this.enqueue(async () => {
       const all = await this.latestKv();
-      // Entries carry their own write time as `at` (the file has no per-key timestamps).
+      // Entries carry their own write time as `at`.
       const stale = Object.keys(all).filter((k) => k.startsWith(prefix) && (Number((all[k] as { at?: number } | null)?.at) || 0) < before);
       if (!stale.length) return 0;
       for (const k of stale) delete all[k];
-      await fs.writeFile(this.kvFile, JSON.stringify(all));
+      await this.writeKv(all);
       return stale.length;
     });
+  }
+
+  /** Cross-process lock: a file created only if absent, naming its holder and when it expires. */
+  private lockFile = (key: string) => path.join(this.dir, `${key.replace(/[^\w.-]/g, '_')}.lock`);
+
+  async claim(key: string, ms: number) {
+    await this.init();
+    const file = this.lockFile(key);
+    const token = randomUUID();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await fs.writeFile(file, JSON.stringify({ token, until: Date.now() + ms }), { flag: 'wx' });
+        return token;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      const held = await this.readJson<{ until?: number } | null>(file, null);
+      // A lock that cannot be read yet is being written right now: treat it as fresh.
+      const until = held ? Number(held.until) || 0 : ((await fs.stat(file).catch(() => null))?.mtimeMs ?? 0) + 10_000;
+      if (until > Date.now()) return null;
+      // Stale lock from a run that never finished: take it over.
+      await fs.rm(file, { force: true });
+    }
+    return null;
+  }
+
+  async release(key: string, token: string) {
+    const file = this.lockFile(key);
+    const held = await this.readJson<{ token?: string } | null>(file, null);
+    if (held?.token === token) await fs.rm(file, { force: true });
   }
 
   private blobFile = (key: string) => path.join(this.dir, 'cache', `${key.replace(/[^\w.-]/g, '_')}.bin`);
@@ -376,8 +490,7 @@ export class FileStore implements Store {
   async setBlob(key: string, value: Buffer) {
     const file = this.blobFile(key);
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(`${file}.tmp`, value);
-    await fs.rename(`${file}.tmp`, file);
+    await this.writeAtomic(file, value);
   }
 
   async stats(setNumber: number) {

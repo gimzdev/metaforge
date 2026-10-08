@@ -7,13 +7,8 @@ import { getStore } from '@/lib/store';
 import { addPlacement, emptyTotals, TOTALS_VERSION, type Totals } from '@/lib/totals';
 
 /**
- * A player's ranked totals for the current set, built by walking their history a little at a time. Each step looks
- * at the newest games not yet counted, counts the ranked ones and saves the result (about 4 KB a player, dropped
- * after a month without a visit), so the next visit only has to add the games played since. It works backwards
- * until it reaches a game from an earlier set or the end of what Riot returns.
- *
- * Background work: it backs off whenever less than a quarter of the Riot rate limit is free, so it never starves
- * the collection run or someone else's lookup, and it stops at MAX_FETCH games for one player.
+ * A player's ranked totals for a set, built a step at a time backwards through their history and saved (~4 KB, pruned
+ * after a month unvisited), so later visits only add new games. Backs off below MIN_HEADROOM; capped at MAX_FETCH games.
  */
 
 const PAGE = 200; // game ids per request (Riot's maximum)
@@ -26,7 +21,7 @@ const BUDGET_MS = 12_000;
 interface Step {
   totals: Totals;
   done: boolean;
-  /** How long the caller should wait before asking for the next step (ms; 0 when done). */
+  /** ms before asking for the next step (0 when done). */
   retryIn: number;
 }
 
@@ -44,6 +39,8 @@ function locked<T>(key: string, work: () => Promise<T>): Promise<T> {
   return run;
 }
 
+const transient = (error: unknown) => error instanceof RiotError && ['budget', 'rate', 'network', 'server'].includes(error.code);
+
 export const advanceTotals = (puuid: string, platform: string, set = configuredSetNumber()): Promise<Step> =>
   locked(`${puuid}:${set}`, () => step(puuid, platform, set));
 
@@ -52,7 +49,7 @@ const MAX_IDS = 4000;
 /** Every game id Riot still lists for the player, newest first. */
 export async function allIds(platform: string, puuid: string, deadline: number): Promise<string[]> {
   const ids: string[] = [];
-  // The first page is usually all there is; a longer history is then asked for four pages at a time.
+  // The first page is usually all there is; longer histories go four pages at a time.
   let start = 0;
   let width = 1;
   while (ids.length < MAX_IDS) {
@@ -66,9 +63,8 @@ export async function allIds(platform: string, puuid: string, deadline: number):
 }
 
 /**
- * For an earlier set: where its games start in the history. Games only ever move forward through sets, so the
- * newest game of that set (or older) is found by halving the list of ids, a dozen lookups instead of fetching every
- * newer game. Returns the id, or 'none' when every game on record is from a later set, or null to just scan.
+ * For an earlier set, its newest game id by bisection (sets only move forward): a dozen lookups instead of every newer
+ * game. 'none' when every game is from a later set, null to just scan.
  */
 async function findBegin(platform: string, puuid: string, set: number, deadline: number): Promise<string | 'none' | null> {
   const ids = await allIds(platform, puuid, deadline);
@@ -105,21 +101,18 @@ async function step(puuid: string, platform: string, set: number): Promise<Step>
   const seen = new Set(t.seen);
   const retry = (ms: number): Step => ({ totals: t, done: false, retryIn: ms });
 
-  // 0. An earlier set starts somewhere back in the history: find where before walking it.
+  // 0. An earlier set starts somewhere back in the history: find where first.
   if (!t.probed && set < configuredSetNumber()) {
     try {
       const found = await findBegin(platform, puuid, set, deadline);
       t.probed = true;
-      if (found === 'none') {
-        t.done = true;
-      } else {
-        t.begin = found;
-      }
+      if (found === 'none') t.done = true;
+      else t.begin = found;
       t.at = Date.now();
       await store.setKv(key, t).catch(() => undefined);
       if (t.done) return { totals: t, done: true, retryIn: 0 };
     } catch (error) {
-      if (error instanceof RiotError && (error.code === 'budget' || error.code === 'rate' || error.code === 'network' || error.code === 'server')) return retry(5_000);
+      if (transient(error)) return retry(5_000);
       throw error;
     }
   }
@@ -150,13 +143,13 @@ async function step(puuid: string, platform: string, set: number): Promise<Step>
     }
   } catch (error) {
     if (error instanceof RiotError && error.code === 'not_found') exhausted = true;
-    else if (error instanceof RiotError && (error.code === 'budget' || error.code === 'rate' || error.code === 'network' || error.code === 'server')) return retry(5_000);
+    else if (transient(error)) return retry(5_000);
     else throw error;
   }
 
   // 2. Fetch and count them, a few at a time.
   const batch = todo.slice(0, STEP);
-  // What each game adds: the set and queue it was played in and the player's placement, or 'skip' for a game that cannot be read.
+  // 'skip' marks a game that cannot be read.
   type Seen = { set: number; queue: number; place: number | null } | 'skip';
   const views = new Array<Seen | undefined>(batch.length).fill(undefined);
   let cursor = 0;
@@ -182,7 +175,7 @@ async function step(puuid: string, platform: string, set: number): Promise<Step>
           if (error.code === 'not_found' || error.code === 'bad_request') views[i] = 'skip';
           else if (error.code === 'budget' || error.code === 'rate') backOff = true;
           else {
-            // A game that keeps failing is given up on after a few tries, so it cannot hold everything else back.
+            // Give up on a game after a few failures so it cannot hold everything back.
             const tries = failures();
             if (tries.size > 2000) tries.clear();
             const n = (tries.get(batch[i]) ?? 0) + 1;
@@ -213,15 +206,14 @@ async function step(puuid: string, platform: string, set: number): Promise<Step>
     }
   }
   t.seen = [...seen];
-  // At the cap, the oldest game reached becomes the start of what is counted (newer games still get added later).
+  // At the cap, the oldest game reached becomes the start (newer games still get added later).
   if (!t.stop && t.fetched >= MAX_FETCH && last) t.stop = last;
 
-  // 2b. Finished when every game newer than the season's start (or the cap) has been looked at. Games older than
-  // a start found in this very step are not this season's, so they do not count as left over.
+  // 2b. Done when every game newer than the start (or cap) was seen; games past a start found this step are not left over.
   const allHandled = handled === batch.length;
   t.done = allHandled && ((t.stop !== null && (!hadStop || todo.length === batch.length)) || (exhausted && todo.length === batch.length));
   const changed = `${t.fetched}|${t.done}|${t.stop}` !== before;
-  // Written when something changed, and about daily otherwise so a player still being looked at is not pruned.
+  // Also rewritten about daily so a player still being looked at is not pruned.
   if (changed || !stored || Date.now() - t.at > 86_400_000) {
     t.at = Date.now();
     await store.setKv(key, t).catch(() => undefined);

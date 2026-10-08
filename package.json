@@ -1,6 +1,6 @@
 {
   "name": "metaforge",
-  "version": "1.2.1",
+  "version": "1.2.0",
   "private": true,
   "description": "MetaForge — Teamfight Tactics meta, explorer, team builder and player lookup.",
   "engines": {

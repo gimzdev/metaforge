@@ -7,6 +7,8 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = {
   title: 'Team builder',
   description: 'Plan TFT boards with drag and drop, live synergies, items and emblems, then share them with a link.',
+  // Shared boards (?b=) are variants of this page.
+  alternates: { canonical: '/builder' },
 };
 
 export default async function BuilderPage({ searchParams }: { searchParams: SearchParams }) {

@@ -1,8 +1,4 @@
-/**
- * Run one match-collection pass from the command line:
- *   npm run ingest                 (regions from INGEST_REGIONS)
- *   npm run ingest -- euw1 kr      (specific regions)
- */
+/** One collection pass: `npm run ingest` (INGEST_REGIONS) or `npm run ingest -- euw1 kr`. */
 import { loadEnvConfig } from '@next/env';
 
 loadEnvConfig(process.cwd());

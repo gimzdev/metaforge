@@ -17,20 +17,15 @@
   --font-sans: 'Onest Variable', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Fraunces Variable', ui-serif, Georgia, serif;
 
-  /*
-   * Forge palette: warm ink and parchment taken from the MetaForge anvil and
-   * the Piltover skyline, one brass accent, sage and terracotta for good and bad.
-   */
+  /* Forge palette: warm ink and parchment, one brass accent, sage and terracotta for good and bad. */
   --color-night: #0f0d0b;
   --color-canopy: #161411;
-  --color-grove: #1c1916;
   --color-bark: #25211d;
   --color-moss: #3a342d;
   --color-moon: #f1e9d8;
   --color-lichen: #b8ab94;
   --color-fog: #857a68;
   --color-wisp: #e2b86a;
-  --color-wisp-deep: #b2781e;
   --color-firefly: #e8c35e;
   --color-ember: #d6805a;
   --color-bloom: #e06e5c;
@@ -129,10 +124,13 @@
     font-family: var(--font-display);
     font-weight: 560;
     letter-spacing: -0.015em;
-    text-wrap: balance;
   }
+  /* overflow-wrap: a one-word title wider than a phone (Morellonomicon in a hero) wraps instead of being cut off. */
+  h1,
+  h2,
   h3 {
     text-wrap: balance;
+    overflow-wrap: break-word;
   }
   img {
     user-select: none;

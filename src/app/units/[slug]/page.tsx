@@ -28,11 +28,13 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   return {
     title: c.name,
     description: `Items, builds, star levels and comps for ${c.name} in TFT from ranked games.`,
+    // The page also answers to api names and loose spellings; the slug is the address to index.
+    alternates: { canonical: `/units/${c.slug}` },
   };
 }
 
 function StatLine({ label, value }: { label: string; value: string | number | null }) {
-  if (value === null || value === undefined) return null;
+  if (value == null) return null;
   return (
     <div className="flex items-center justify-between border-t hairline py-2 text-sm first:border-t-0">
       <span className="text-lichen">{label}</span>
@@ -92,9 +94,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
         }
       >
         <div className="flex flex-wrap gap-x-4 gap-y-2">
-          {c.traits.map((t) => (
-            <TraitBadge key={t} id={t} tier={1} size={28} showName showCount={false} />
-          ))}
+          {c.traits.map((t) => <TraitBadge key={t} id={t} tier={1} size={28} showName showCount={false} />)}
         </div>
       </DetailHero>
 
@@ -103,20 +103,19 @@ export default async function UnitPage({ params, searchParams }: { params: Param
           {hasStats ? <SummaryTiles summary={stats.summary} playRate={playRate} /> : <NoStatsNotice what={`${c.name} stats`} />}
 
           {hasStats && (
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-              <Panel title="By star level" flush>
-                <EntityTable kind="star" rows={stats.stars} defaultSort="name" freqLabel="Share" showDelta={false} link={false} />
+            <>
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <Panel title="By star level" flush>
+                  <EntityTable kind="star" rows={stats.stars} defaultSort="name" freqLabel="Share" showDelta={false} link={false} />
+                </Panel>
+                <Panel title="By items held" flush>
+                  <EntityTable kind="count" rows={stats.itemCounts} defaultSort="name" freqLabel="Share" showDelta={false} link={false} />
+                </Panel>
+              </div>
+              <Panel title="Best items" aside={<span className="text-xs">Share of boards where {c.name} holds it</span>} flush>
+                <EntityTable kind="item" rows={stats.items} minN={itemMin} freqLabel="Held" limit={15} />
               </Panel>
-              <Panel title="By items held" flush>
-                <EntityTable kind="count" rows={stats.itemCounts} defaultSort="name" freqLabel="Share" showDelta={false} link={false} />
-              </Panel>
-            </div>
-          )}
-
-          {hasStats && (
-            <Panel title="Best items" aside={<span className="text-xs">Share of boards where {c.name} holds it</span>} flush>
-              <EntityTable kind="item" rows={stats.items} minN={itemMin} freqLabel="Held" limit={15} />
-            </Panel>
+            </>
           )}
 
           {hasStats && stats.builds.length > 0 && (
@@ -125,9 +124,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
                 {stats.builds.slice(0, 10).map((b) => (
                   <li key={b.items.join('+')} className="flex items-center gap-4 border-t hairline px-4 py-3 first:border-t-0 sm:px-5">
                     <span className="flex gap-1">
-                      {b.items.map((it, i) => (
-                        <ItemIcon key={`${it}-${i}`} id={it} px={34} />
-                      ))}
+                      {b.items.map((it, i) => <ItemIcon key={`${it}-${i}`} id={it} px={34} />)}
                     </span>
                     <span className="hidden min-w-0 flex-1 truncate text-sm text-lichen md:block">{b.items.map((it) => index.item(it)?.name ?? it).join(', ')}</span>
                     <span className="ml-auto grid grid-cols-3 gap-4 text-right text-sm">
@@ -154,9 +151,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
               </div>
             </div>
             {(s.mana !== null || s.initialMana !== null) && (
-              <div className="mt-3 text-xs text-fog">
-                Mana {s.initialMana ?? 0} / {s.mana ?? '?'}
-              </div>
+              <div className="mt-3 text-xs text-fog">Mana {s.initialMana ?? 0} / {s.mana ?? '?'}</div>
             )}
           </Panel>
           <Panel title="Base stats" bodyClassName="p-4 sm:p-5 px-4 py-2 sm:px-5">
@@ -180,12 +175,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
                     <span className="ml-auto text-xs text-fog">{trait.effects.map((e) => e.minUnits).join(' / ')}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1">
-                    {trait.champions
-                      .filter((k) => k !== c.key)
-                      .slice(0, 10)
-                      .map((k) => (
-                        <ChampionIcon key={k} id={k} size="xs" link={false} />
-                      ))}
+                    {trait.champions.filter((k) => k !== c.key).slice(0, 10).map((k) => <ChampionIcon key={k} id={k} size="xs" link={false} />)}
                   </div>
                 </Link>
               );
@@ -198,9 +188,7 @@ export default async function UnitPage({ params, searchParams }: { params: Param
         <section className="space-y-4">
           <h2 className="text-xl font-semibold tracking-tight">Comps with {c.name}</h2>
           <div className="space-y-2.5">
-            {stats.comps.slice(0, 6).map((comp) => (
-              <CompRowCard key={comp.id} comp={comp} showGrade />
-            ))}
+            {stats.comps.slice(0, 6).map((comp) => <CompRowCard key={comp.id} comp={comp} showGrade />)}
           </div>
         </section>
       )}

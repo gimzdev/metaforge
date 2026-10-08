@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Fragment, type ReactNode } from 'react';
+import { BoardButton } from '@/components/game/board-button';
 import { AugmentIcon, ChampionIcon, ItemIcon, Stars, TraitBadge } from '@/components/game/entities';
 import { costColor, currentIndex, traitKindLabel } from '@/lib/static';
 import { ITEM_CATEGORY_LABEL } from '@/lib/static/types';
@@ -26,8 +27,10 @@ const PLACE_COLOR = ['firefly', 'good', 'good', 'good', 'fog', 'fog', 'fog', 'bl
 export function PlacementBars({ placements, className, height = 36, labels = false }: { placements: number[]; className?: string; height?: number; labels?: boolean }) {
   const total = placements.reduce((a, b) => a + b, 0) || 1;
   const max = Math.max(...placements, 1);
+  // The bars' tooltips reach a mouse only: screen readers get the shares as the picture's label.
+  const summary = placements.map((v, i) => `${fmt.ordinal(i + 1)} ${fmt.pct(v / total)}`).join(', ');
   return (
-    <div className={cn('flex items-end gap-[3px]', className)} aria-label="Placement distribution">
+    <div className={cn('flex items-end gap-[3px]', className)} role="img" aria-label={`Placements: ${summary}`}>
       {placements.map((v, i) => (
         <div key={i} className="flex flex-1 flex-col items-center gap-1">
           <div className="flex w-full items-end" style={{ height }}>
@@ -57,13 +60,7 @@ export function FreqBar({ value, max = 1, className }: { value: number; max?: nu
 }
 
 export const GRADE_TEXT: Record<Tier, string> = { S: 'text-tier-s', A: 'text-tier-a', B: 'text-tier-b', C: 'text-tier-c', D: 'text-tier-d' };
-const GRADE_STYLE: Record<Tier, string> = {
-  S: 'bg-tier-s text-night',
-  A: 'bg-tier-a text-night',
-  B: 'bg-tier-b text-night',
-  C: 'bg-tier-c text-night',
-  D: 'bg-tier-d text-night',
-};
+const GRADE_STYLE: Record<Tier, string> = { S: 'bg-tier-s text-night', A: 'bg-tier-a text-night', B: 'bg-tier-b text-night', C: 'bg-tier-c text-night', D: 'bg-tier-d text-night' };
 
 /** Letter grade tile; `size` replaces the default size, corner and text size. */
 export function GradeBadge({ grade, size = 'size-8 rounded-md text-[17px]' }: { grade: Tier | null; size?: string }) {
@@ -104,17 +101,17 @@ export function SummaryTiles({ summary, playRate, playLabel = 'Play rate' }: { s
   );
 }
 
-/* ── Entity cells ───────────────────────────────────────── */
-
 export type EntityKind = 'unit' | 'item' | 'trait' | 'aug' | 'level';
 
-function Named({ icon, name, sub, subStyle }: { icon: ReactNode; name: ReactNode; sub: ReactNode; subStyle?: string }) {
+function Named({ icon, name, sub, subStyle = 'text-fog', color }: { icon: ReactNode; name: ReactNode; sub: ReactNode; subStyle?: string; color?: string }) {
   return (
     <span className="flex items-center gap-3">
       {icon}
       <span className="min-w-0 max-w-[9.5rem] @md:max-w-[15rem] @3xl:max-w-none">
         <span className="block truncate font-medium text-moon">{name}</span>
-        <span className={cn('block text-xs', subStyle ?? 'text-fog')}>{sub}</span>
+        <span className={cn('block text-xs', subStyle)} style={color ? { color } : undefined}>
+          {sub}
+        </span>
       </span>
     </span>
   );
@@ -126,17 +123,7 @@ export function EntityCell({ kind, id, tier }: { kind: EntityKind; id: string; t
   if (kind === 'unit') {
     const c = index.champion(id);
     if (!c) return <span className="text-fog">{id}</span>;
-    return (
-      <span className="flex items-center gap-3">
-        <ChampionIcon id={id} size="sm" link={false} />
-        <span className="min-w-0 max-w-[9.5rem] @md:max-w-[15rem] @3xl:max-w-none">
-          <span className="block truncate font-medium text-moon">{c.name}</span>
-          <span className="block text-xs" style={{ color: costColor(c.cost) }}>
-            {c.cost}-cost
-          </span>
-        </span>
-      </span>
-    );
+    return <Named icon={<ChampionIcon id={id} size="sm" link={false} />} name={c.name} sub={`${c.cost}-cost`} subStyle="" color={costColor(c.cost)} />;
   }
   if (kind === 'item') {
     const i = index.item(id);
@@ -163,7 +150,8 @@ export function EntityCell({ kind, id, tier }: { kind: EntityKind; id: string; t
   }
   if (kind === 'aug') {
     const a = index.augment(id);
-    return <Named icon={<AugmentIcon id={id} px={30} />} name={a?.name ?? id} sub={a?.tier ?? 'augment'} subStyle="capitalize text-fog" />;
+    const tier = a && a.tier !== 'unknown' ? a.tier : 'augment';
+    return <Named icon={<AugmentIcon id={id} px={30} />} name={a?.name ?? id} sub={tier} subStyle="capitalize text-fog" />;
   }
   return (
     <span className="flex items-center gap-3">
@@ -184,8 +172,6 @@ export function StarLabel({ star }: { star: number }) {
     </span>
   );
 }
-
-/* ── Comps ──────────────────────────────────────────────── */
 
 type AnyComp = CompRow & { grade?: Tier | null };
 
@@ -213,11 +199,20 @@ function Figure({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * One comp as one quiet card linking to its page: name and core traits in words, the
- * board it usually fields with the carries' items, four numbers and how its placements
- * spread. Phones stack it; wide screens put everything on one line.
+ * One comp as a card linking to its page; phones stack it, wide screens put everything on one line. With `onToggleBoard` the
+ * row gets a Positioning button that swaps its stats for `board` (the recommended board) and back.
  */
-export function CompRowCard({ comp, showGrade = false }: { comp: AnyComp; showGrade?: boolean }) {
+export function CompRowCard({
+  comp,
+  showGrade = false,
+  board,
+  onToggleBoard,
+}: {
+  comp: AnyComp;
+  showGrade?: boolean;
+  board?: ReactNode;
+  onToggleBoard?: () => void;
+}) {
   const index = currentIndex();
   const traits = comp.traits
     .slice(0, 4)
@@ -227,14 +222,22 @@ export function CompRowCard({ comp, showGrade = false }: { comp: AnyComp; showGr
     })
     .filter(Boolean)
     .join(' · ');
+  const showBoard = Boolean(board);
   return (
     <Link
       href={`/comps/${comp.id}`}
       aria-label={`${comp.name}: ${fmt.place(comp.avg)} average place, ${fmt.pct(comp.top4, 0)} top 4`}
       className={cn(
         'surface group/comp grid rounded-xl px-4 py-4 transition-colors hover:border-lichen/35 sm:px-5',
-        "grid-cols-[minmax(0,1fr)_auto] gap-x-4 [grid-template-areas:'name_bars'_'units_units'_'stats_stats']",
-        "lg:grid-cols-[13rem_minmax(0,1fr)_auto_auto] lg:items-center lg:gap-x-8 lg:[grid-template-areas:'name_units_stats_bars']",
+        'grid-cols-[minmax(0,1fr)_auto] gap-x-4',
+        showBoard
+          ? "[grid-template-areas:'name_toggle'_'units_units'_'board_board']"
+          : "[grid-template-areas:'name_bars'_'units_units'_'stats_toggle']",
+        onToggleBoard
+          ? showBoard
+            ? "lg:grid-cols-[13rem_minmax(0,1fr)_auto_auto_auto] lg:items-center lg:gap-x-8 lg:[grid-template-areas:'name_units_board_board_toggle']"
+            : "lg:grid-cols-[13rem_minmax(0,1fr)_auto_auto_auto] lg:items-center lg:gap-x-8 lg:[grid-template-areas:'name_units_stats_bars_toggle']"
+          : "lg:grid-cols-[13rem_minmax(0,1fr)_auto_auto] lg:items-center lg:gap-x-8 lg:[grid-template-areas:'name_units_stats_bars']",
       )}
     >
       <div className="min-w-0 [grid-area:name]">
@@ -255,22 +258,34 @@ export function CompRowCard({ comp, showGrade = false }: { comp: AnyComp; showGr
         ))}
       </div>
 
-      <dl className="mt-4 grid grid-cols-4 gap-x-4 [grid-area:stats] lg:mt-0 lg:w-[16.5rem]">
-        <Figure label="Avg place">
-          <AvgPlace value={comp.avg} />
-        </Figure>
-        <Figure label="Top 4">{fmt.pct(comp.top4, 0)}</Figure>
-        <Figure label="Win">{fmt.pct(comp.win, 1)}</Figure>
-        <Figure label="Played">{fmt.pct(comp.freq, comp.freq < 0.1 ? 1 : 0)}</Figure>
-      </dl>
+      {showBoard ? (
+        <div className="mt-4 min-w-0 [grid-area:board] lg:mt-0">{board}</div>
+      ) : (
+        <>
+          <dl className="mt-4 grid grid-cols-4 gap-x-4 [grid-area:stats] lg:mt-0 lg:w-[16.5rem]">
+            <Figure label="Avg place">
+              <AvgPlace value={comp.avg} />
+            </Figure>
+            <Figure label="Top 4">{fmt.pct(comp.top4, 0)}</Figure>
+            <Figure label="Win">{fmt.pct(comp.win, 1)}</Figure>
+            <Figure label="Played">{fmt.pct(comp.freq, comp.freq < 0.1 ? 1 : 0)}</Figure>
+          </dl>
 
-      <div className="self-start [grid-area:bars] lg:self-center" title="Share of finishes from 1st (left) to 8th (right)">
-        <PlacementBars placements={comp.placements} height={26} className="w-24" />
-        <div className="mt-1.5 flex justify-between text-[10px] leading-none text-fog">
-          <span>1st</span>
-          <span>8th</span>
+          <div className="self-start [grid-area:bars] lg:self-center" title="Share of finishes from 1st (left) to 8th (right)">
+            <PlacementBars placements={comp.placements} height={26} className="w-24" />
+            <div className="mt-1.5 flex justify-between text-[10px] leading-none text-fog">
+              <span>1st</span>
+              <span>8th</span>
+            </div>
+          </div>
+        </>
+      )}
+
+      {onToggleBoard && (
+        <div className="mt-4 self-center justify-self-end [grid-area:toggle] lg:mt-0">
+          <BoardButton open={showBoard} onClick={onToggleBoard} />
         </div>
-      </div>
+      )}
     </Link>
   );
 }
@@ -280,7 +295,8 @@ export function CompLine({ comp, actions }: { comp: AnyComp; actions?: ReactNode
   return (
     <div className="group relative flex items-center gap-3 border-t hairline px-4 py-3 transition-colors first:border-t-0 hover:bg-white/[0.03]">
       {comp.grade !== undefined && <GradeBadge grade={comp.grade} size="size-7 rounded-md text-sm" />}
-      <div className="w-44 min-w-0 shrink-0 sm:w-52">
+      {/* Fixed width once the board shows (sm and up); on phones it takes what is left, or the row overflows 360 px. */}
+      <div className="min-w-0 flex-1 sm:w-52 sm:flex-none">
         <Link href={`/comps/${comp.id}`} className="block truncate text-sm font-semibold text-moon after:absolute after:inset-0 group-hover:text-wisp">
           {comp.name}
         </Link>
@@ -309,7 +325,7 @@ export function CompLine({ comp, actions }: { comp: AnyComp; actions?: ReactNode
 export function CompLineHeader() {
   return (
     <div className="flex items-center gap-3 bg-canopy px-4 py-2.5 text-xs text-lichen">
-      <span className="w-44 shrink-0 sm:w-52">Comp</span>
+      <span className="min-w-0 flex-1 sm:w-52 sm:flex-none">Comp</span>
       <span className="hidden flex-1 md:block">Typical board</span>
       <span className="ml-auto grid shrink-0 grid-cols-[3.5rem_3.5rem] gap-2 text-right sm:grid-cols-[3.5rem_3.5rem_3.5rem_4rem]">
         <span>Avg</span>

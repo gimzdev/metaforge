@@ -1,29 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { LucideIcon } from '@/components/icons';
-import {
-  ArrowDown,
-  ArrowLeftRight,
-  ArrowRight,
-  ArrowUp,
-  Ban,
-  ExternalLink,
-  Settings2,
-  Sparkles,
-  Undo2,
-  Wrench,
-} from '@/components/icons';
+import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, ExternalLink, Settings2, Sparkles, Undo2, Wrench } from '@/components/icons';
 import { configuredSetNumber, currentPatch, getSetInfo } from '@/config/game';
-import {
-  ESPORTS,
-  ESPORTS_SOURCE,
-  OFFICIAL_LINKS,
-  PATCH_NOTES,
-  type Change,
-  type ChangeGroup,
-  type ChangeKind,
-  type PatchNote,
-} from '@/content/news';
+import { ESPORTS, ESPORTS_SOURCE, OFFICIAL_LINKS, PATCH_NOTES, type Change, type ChangeGroup, type ChangeKind, type PatchNote } from '@/content/news';
 import { AugmentIcon, ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
 import { PageHeader } from '@/components/ui';
 import { HScroll } from '@/components/ui-client';
@@ -34,10 +14,20 @@ import { cn, fmt, slugify } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
-  title: 'Patch notes',
-  description: 'Every Set 18 Enchanted Wilds patch sorted into buffs, nerfs and changes, plus the patch calendar and the competitive schedule.',
-};
+const selectedNote = (sp: Awaited<SearchParams>) => PATCH_NOTES.find((n) => n.id === param(sp, 'p')) ?? PATCH_NOTES[0];
+
+export async function generateMetadata({ searchParams }: { searchParams: SearchParams }): Promise<Metadata> {
+  const note = selectedNote(await searchParams);
+  const info = getSetInfo(configuredSetNumber());
+  const newest = note.id === PATCH_NOTES[0].id;
+  return {
+    title: newest ? 'Patch notes' : `Patch ${note.label} notes`,
+    description: newest
+      ? `Every Set ${info.number} ${info.name} patch sorted into buffs, nerfs and changes, plus the patch calendar and the competitive schedule.`
+      : note.summary,
+    alternates: { canonical: noteHref(note) },
+  };
+}
 
 const KIND_LABEL: Record<PatchNote['kind'], string> = {
   launch: 'Set launch',
@@ -57,8 +47,6 @@ const CHANGE: Record<ChangeKind, { icon: LucideIcon; tone: string; one: string; 
 };
 const KIND_ORDER: ChangeKind[] = ['buff', 'nerf', 'change', 'revert', 'disabled', 'new', 'fix'];
 
-/* ── Matching targets to the catalog ─────────────────────── */
-
 type Ref = { type: 'unit' | 'trait' | 'item' | 'augment'; key: string; href?: string };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -77,7 +65,7 @@ function resolver(data: StaticData | null) {
   };
 }
 
-/** Changes of one group, gathered per target in the order they first appear. */
+/** Changes of one group per target, in first-appearance order. */
 function byTarget(group: ChangeGroup) {
   const out = new Map<string, Change[]>();
   for (const c of group.changes) out.set(c.target, [...(out.get(c.target) ?? []), c]);
@@ -89,8 +77,6 @@ function tally(note: PatchNote) {
   for (const g of note.groups) for (const c of g.changes) counts.set(c.kind, (counts.get(c.kind) ?? 0) + 1);
   return KIND_ORDER.filter((k) => counts.get(k)).map((k) => ({ kind: k, n: counts.get(k)! }));
 }
-
-/* ── Pieces ──────────────────────────────────────────────── */
 
 function Marker({ kind }: { kind: ChangeKind }) {
   const { icon: Icon, tone, one } = CHANGE[kind];
@@ -122,9 +108,8 @@ function Values({ change }: { change: Change }) {
       {change.from ? (
         <>
           <span className="whitespace-nowrap text-fog">{change.from}</span>
-          <span className="text-fog" aria-label="to">
-            →
-          </span>
+          <span className="text-fog" aria-hidden>→</span>
+          <span className="sr-only">to</span>
         </>
       ) : (
         <span className="text-fog">now</span>
@@ -161,9 +146,7 @@ function Group({ group, resolve }: { group: ChangeGroup; resolve: ReturnType<typ
               className="grid gap-x-6 gap-y-2 border-t hairline px-4 py-3.5 first:border-t-0 sm:px-5 md:grid-cols-[13rem_minmax(0,1fr)]"
             >
               {refd?.href ? (
-                <Link href={refd.href} className="group/target self-start rounded-md">
-                  {name}
-                </Link>
+                <Link href={refd.href} className="group/target self-start rounded-md">{name}</Link>
               ) : (
                 <div className="self-start">{name}</div>
               )}
@@ -188,8 +171,6 @@ function Group({ group, resolve }: { group: ChangeGroup; resolve: ReturnType<typ
     </section>
   );
 }
-
-/* ── Patch timeline: the calendar is the navigation ─────── */
 
 type PatchWindow = ReturnType<typeof getSetInfo>['patches'][number];
 
@@ -229,22 +210,12 @@ function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; 
           const body = (
             <>
               <span className="relative z-10 grid size-[24px] place-items-center rounded-full bg-canopy">{dot}</span>
-              <span
-                className={cn(
-                  'num mt-3 text-[17px] font-semibold leading-none transition-colors',
-                  on ? 'text-wisp' : future ? 'text-lichen' : 'text-moon group-hover:text-wisp',
-                )}
-              >
+              <span className={cn('num mt-3 text-[17px] font-semibold leading-none transition-colors', on ? 'text-wisp' : future ? 'text-lichen' : 'text-moon group-hover:text-wisp')}>
                 {p.label}
               </span>
               <span className={cn('mt-1.5 whitespace-nowrap text-[13px]', on ? 'text-moon' : 'text-lichen')}>
-                {isLive ? (
-                  <>
-                    <span className="font-medium text-good">Live</span> · {fmt.date(`${p.start}T12:00:00Z`)}
-                  </>
-                ) : (
-                  fmt.date(`${p.start}T12:00:00Z`)
-                )}
+                {isLive && <><span className="font-medium text-good">Live</span> · </>}
+                {fmt.date(`${p.start}T12:00:00Z`)}
               </span>
             </>
           );
@@ -252,9 +223,7 @@ function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; 
           return (
             <li key={p.label} className="relative flex justify-center">
               {i > 0 && <span aria-hidden className={cn('absolute left-0 right-1/2 top-[24px] border-t-2', line(i - 1))} />}
-              {i < patches.length - 1 && (
-                <span aria-hidden className={cn('absolute left-1/2 right-0 top-[24px] border-t-2', line(i))} />
-              )}
+              {i < patches.length - 1 && <span aria-hidden className={cn('absolute left-1/2 right-0 top-[24px] border-t-2', line(i))} />}
               {note && !future ? (
                 <Link
                   href={noteHref(note)}
@@ -266,9 +235,7 @@ function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; 
                   {body}
                 </Link>
               ) : (
-                <div className={box} title={future ? (p.tentative ? 'Planned' : 'Upcoming') : undefined}>
-                  {body}
-                </div>
+                <div className={box} title={future ? (p.tentative ? 'Planned' : 'Upcoming') : undefined}>{body}</div>
               )}
             </li>
           );
@@ -278,7 +245,14 @@ function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; 
   );
 }
 
-/* ── Page ────────────────────────────────────────────────── */
+function ExtLink({ href, className, icon = 'size-3.5', children }: { href: string; className: string; icon?: string; children: React.ReactNode }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer noopener" className={cn('text-lichen transition-colors hover:text-wisp', className)}>
+      {children}
+      <ExternalLink className={icon} aria-hidden />
+    </a>
+  );
+}
 
 export default async function NewsPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
@@ -286,11 +260,9 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
   const info = getSetInfo(setNumber);
   const live = currentPatch(setNumber)?.label;
   const today = new Date().toISOString().slice(0, 10);
-  const data = await getStaticData().catch(() => null);
-  const resolve = resolver(data);
+  const resolve = resolver(await getStaticData().catch(() => null));
 
-  const wanted = param(sp, 'p');
-  const note = PATCH_NOTES.find((n) => n.id === wanted) ?? PATCH_NOTES[0];
+  const note = selectedNote(sp);
   const counts = tally(note);
   const nextEvent = ESPORTS.find((e) => e.ends >= today);
 
@@ -327,9 +299,7 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
             )}
           </header>
 
-          {note.groups.map((g) => (
-            <Group key={g.title} group={g} resolve={resolve} />
-          ))}
+          {note.groups.map((g) => <Group key={g.title} group={g} resolve={resolve} />)}
         </article>
 
         <aside className="hidden lg:block">
@@ -351,15 +321,7 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
               </ol>
             </nav>
             <div className="space-y-2.5 border-t hairline pt-5 text-sm">
-              <a
-                href={note.source.url}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="flex items-center justify-between gap-3 text-lichen transition-colors hover:text-wisp"
-              >
-                Riot&apos;s full notes
-                <ExternalLink className="size-3.5" aria-hidden />
-              </a>
+              <ExtLink href={note.source.url} className="flex items-center justify-between gap-3">Riot&apos;s full notes</ExtLink>
               <Link href="/guides#set-mechanics" className="group flex items-center justify-between gap-3 text-lichen transition-colors hover:text-wisp">
                 How {info.name} works
                 <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
@@ -369,15 +331,9 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
         </aside>
       </div>
 
-      <a
-        href={note.source.url}
-        target="_blank"
-        rel="noreferrer noopener"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-lichen transition-colors hover:text-wisp lg:hidden"
-      >
+      <ExtLink href={note.source.url} className="inline-flex items-center gap-1.5 text-sm font-medium lg:hidden">
         Riot&apos;s full {note.label} notes
-        <ExternalLink className="size-3.5" aria-hidden />
-      </a>
+      </ExtLink>
 
       <section className="space-y-5 border-t hairline pt-10">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
@@ -388,15 +344,9 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
               {nextEvent ? ` Next up: ${nextEvent.name}, ${nextEvent.dates}.` : ''}
             </p>
           </div>
-          <a
-            href={ESPORTS_SOURCE.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-lichen transition-colors hover:text-wisp"
-          >
+          <ExtLink href={ESPORTS_SOURCE.url} className="inline-flex items-center gap-1.5 text-sm font-medium">
             {ESPORTS_SOURCE.label}
-            <ExternalLink className="size-3.5" aria-hidden />
-          </a>
+          </ExtLink>
         </div>
         <ol className="surface divide-y divide-line overflow-hidden rounded-xl">
           {ESPORTS.map((e) => {
@@ -405,17 +355,9 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
             return (
               <li
                 key={e.name}
-                className={cn(
-                  'grid gap-x-6 gap-y-1 px-4 py-3.5 sm:px-5 md:grid-cols-[5.5rem_minmax(0,15rem)_9rem_minmax(0,1fr)] md:items-baseline',
-                  next && 'bg-wisp/[0.05]',
-                )}
+                className={cn('grid gap-x-6 gap-y-1 px-4 py-3.5 sm:px-5 md:grid-cols-[5.5rem_minmax(0,15rem)_9rem_minmax(0,1fr)] md:items-baseline', next && 'bg-wisp/[0.05]')}
               >
-                <span
-                  className={cn(
-                    'text-[11px] font-semibold uppercase tracking-[0.12em]',
-                    done ? 'text-fog' : next ? 'text-wisp' : 'text-lichen',
-                  )}
-                >
+                <span className={cn('text-[11px] font-semibold uppercase tracking-[0.12em]', done ? 'text-fog' : next ? 'text-wisp' : 'text-lichen')}>
                   {done ? 'Done' : next ? 'Next' : 'Upcoming'}
                 </span>
                 <span className={cn('font-medium', done ? 'text-lichen' : 'text-moon')}>{e.name}</span>
@@ -428,16 +370,9 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-1 text-sm">
           <span className="eyebrow text-fog">From Riot</span>
           {OFFICIAL_LINKS.map((l) => (
-            <a
-              key={l.url}
-              href={l.url}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="inline-flex items-center gap-1.5 text-lichen transition-colors hover:text-wisp"
-            >
+            <ExtLink key={l.url} href={l.url} icon="size-3" className="inline-flex items-center gap-1.5">
               {l.label}
-              <ExternalLink className="size-3" aria-hidden />
-            </a>
+            </ExtLink>
           ))}
         </div>
       </section>

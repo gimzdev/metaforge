@@ -3,12 +3,8 @@ import { getSetInfo, RANKED_QUEUE } from '@/config/game';
 import { env } from '@/lib/env';
 import { getStore, type StoredMatch } from '@/lib/store';
 
-/**
- * Every stored board in a compact column layout, with ids exactly as match data has
- * them (lowercased). It doesn't depend on the game data, so it can be cached as one
- * small blob in the store: a server that starts cold loads the blob plus the matches
- * stored since, instead of every board as JSON. Newest match first.
- */
+// Every stored board in a compact column layout, newest match first, ids as match data has them (lowercased). It doesn't
+// depend on the game data, so it is cached as one small blob: a cold server loads it plus the matches stored since.
 export interface Columns {
   /** Query identity: a blob built for another set, queue or limit is ignored. */
   key: string;
@@ -58,8 +54,7 @@ const TABLES = ['units', 'items', 'traits', 'augs', 'regions'] as const;
 const VERSION = 1;
 const BLOB = 'boards';
 const DAY = 86_400_000;
-/** Read the store in full at least this often, so the blob can never drift for long. */
-const FULL_EVERY = DAY;
+const FULL_EVERY = DAY; // read the store in full at least this often, so the blob can never drift for long
 
 class Interner {
   keys: string[] = [];
@@ -93,12 +88,16 @@ class ColumnsBuilder {
     if (this.seen.has(match.matchId)) return;
     this.seen.add(match.matchId);
     const { a, t } = this;
-    const m = this.start(match.matchId, match.datetime, match.boards[0]?.platform ?? match.platform);
-    for (const b of match.boards) {
-      const units = Array.isArray(b.units) ? b.units : [];
+    // Stored boards are JSON. Malformed entries are skipped before anything is written (a throw half
+    // way through a board would shift every board after it), and counts stay within their Uint8 columns.
+    const boards = Array.isArray(match.boards) ? match.boards : [];
+    const m = this.start(match.matchId, match.datetime, boards[0]?.platform ?? match.platform);
+    for (const b of boards) {
+      if (!b || typeof b !== 'object' || m.n === 255) continue;
+      const units = (Array.isArray(b.units) ? b.units : []).filter((u) => Array.isArray(u)).slice(0, 255);
       if (!(b.placement >= 1 && b.placement <= 8) || !units.length) continue;
       for (const u of units) {
-        const items = (Array.isArray(u[2]) ? u[2] : []).filter((i) => typeof i === 'string' && i);
+        const items = (Array.isArray(u[2]) ? u[2] : []).filter((i) => typeof i === 'string' && i).slice(0, 255);
         a.uId.push(t.units.add(String(u[0]).toLowerCase()));
         a.uStar.push(clamp(Number(u[1]) || 1, 1, 4));
         a.iCount.push(items.length);
@@ -106,14 +105,14 @@ class ColumnsBuilder {
       }
       let traits = 0;
       for (const tr of Array.isArray(b.traits) ? b.traits : []) {
-        if (!(Number(tr[3]) > 0)) continue;
+        if (!Array.isArray(tr) || !(Number(tr[3]) > 0) || traits === 255) continue;
         a.tId.push(t.traits.add(String(tr[0]).toLowerCase()));
-        a.tUnits.push(Math.min(255, Number(tr[1]) || 0));
+        a.tUnits.push(clamp(Number(tr[1]) || 0, 0, 255));
         a.tStyle.push(clamp(Number(tr[2]) || 0, 0, 255));
         a.tTier.push(Math.min(15, Number(tr[3]) || 0));
         traits++;
       }
-      const augs = (Array.isArray(b.augments) ? b.augments : []).filter((x) => typeof x === 'string');
+      const augs = (Array.isArray(b.augments) ? b.augments : []).filter((x) => typeof x === 'string').slice(0, 255);
       for (const x of augs) a.aId.push(t.augs.add(x.toLowerCase()));
       a.place.push(b.placement);
       a.level.push(clamp(b.level || 0, 0, 15));
@@ -207,11 +206,12 @@ class ColumnsBuilder {
     ];
     for (const [names, key] of groups) {
       const n = size(key);
+      const endKey = `${key}E` as const;
       for (const name of names) {
         const target = alloc(name, n);
         const source = a[name as keyof typeof a];
         let o = 0;
-        for (const s of chosen) for (let k = s[key]; k < s[`${key}E`]; k++) target[o++] = source[k];
+        for (const s of chosen) for (let k = s[key], end = s[endKey]; k < end; k++) target[o++] = source[k];
       }
     }
     return out;
@@ -221,17 +221,9 @@ class ColumnsBuilder {
 /* ── Blob encoding ──────────────────────────────────────── */
 
 function encode(c: Columns): Buffer {
-  const header = Buffer.from(
-    JSON.stringify({
-      v: VERSION,
-      key: c.key,
-      cursor: c.cursor,
-      fullAt: c.fullAt,
-      matches: c.matches,
-      ...Object.fromEntries(TABLES.map((k) => [k, c[k]])),
-      lengths: ARRAYS.map(([k]) => c[k].length),
-    }),
-  );
+  const tables = Object.fromEntries(TABLES.map((k) => [k, c[k]]));
+  const lengths = ARRAYS.map(([k]) => c[k].length);
+  const header = Buffer.from(JSON.stringify({ v: VERSION, key: c.key, cursor: c.cursor, fullAt: c.fullAt, matches: c.matches, ...tables, lengths }));
   const parts: Buffer[] = [Buffer.alloc(4), header];
   parts[0].writeUInt32LE(header.length);
   let size = 4 + header.length;
@@ -263,24 +255,40 @@ function decode(blob: Buffer | null): Columns | null {
     ARRAYS.forEach(([name, Type], idx) => {
       offset += (8 - (offset % 8)) % 8;
       const bytes = header.lengths[idx] * Type.BYTES_PER_ELEMENT;
+      if (!(bytes >= 0 && offset + bytes <= buf.length)) throw new Error('truncated');
       const copy = new Uint8Array(bytes);
       copy.set(buf.subarray(offset, offset + bytes));
       (out as unknown as Record<string, unknown>)[name] = new Type(copy.buffer);
       offset += bytes;
     });
-    return out;
+    return consistent(out) ? out : null;
   } catch {
     return null;
   }
 }
 
+/**
+ * Every count column adds up to the length of what it counts. A layout that doesn't (one saved by an
+ * older version from a damaged row) would shift every board after the damage, so it is read again instead.
+ */
+function consistent(c: Columns) {
+  const sum = (counts: Uint8Array) => counts.reduce((s, x) => s + x, 0);
+  const sized = (n: number, ...arrays: ArrayLike<number>[]) => arrays.every((x) => x.length === n);
+  return (
+    TABLES.every((k) => Array.isArray(c[k])) &&
+    Array.isArray(c.matches) &&
+    sized(c.matches.length, c.mTime, c.mRegion, c.mBoards) &&
+    sized(sum(c.mBoards), c.place, c.level, c.uCount, c.tCount, c.aCount) &&
+    sized(sum(c.uCount), c.uId, c.uStar, c.iCount) &&
+    sized(sum(c.iCount), c.iId) &&
+    sized(sum(c.tCount), c.tId, c.tUnits, c.tStyle, c.tTier) &&
+    sized(sum(c.aCount), c.aId)
+  );
+}
+
 /* ── Loading ────────────────────────────────────────────── */
 
-/**
- * The stored boards for a set: the previous layout (in memory, or the blob) plus
- * whatever the store holds that it hasn't seen. With `persist`, the result is saved
- * as the blob (the collection run does this, so cold servers start from it).
- */
+/** The previous layout (in memory, or the blob) plus what the store holds that it hasn't seen; `persist` saves it as the blob. */
 export async function loadColumns(prev: Columns | null, setNumber: number, opts: { persist?: boolean } = {}): Promise<Columns> {
   const store = getStore();
   const setStart = Date.parse(`${getSetInfo(setNumber).start}T00:00:00Z`);
@@ -289,8 +297,7 @@ export async function loadColumns(prev: Columns | null, setNumber: number, opts:
   const key = `v${VERSION}|set${setNumber}|q${RANKED_QUEUE}|from${firstDay}|keep${env.retainDays}|max${env.maxBoards}`;
   const usable = (c: Columns | null) => (c && c.key === key && Date.now() - c.fullAt < FULL_EVERY ? c : null);
 
-  let base = usable(prev);
-  if (!base) base = usable(decode(await store.getBlob(BLOB).catch(() => null)));
+  const base = usable(prev) ?? usable(decode(await store.getBlob(BLOB).catch(() => null)));
   const builder = new ColumnsBuilder();
   // Reads from a cursor can repeat matches already held (Postgres looks a little further back).
   const held = new Set(base?.matches);

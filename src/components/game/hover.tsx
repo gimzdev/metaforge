@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useStaticText } from '@/components/providers';
 import { floatingSize, placeFloating } from '@/lib/floating';
@@ -12,16 +12,24 @@ import { Portrait, TraitHex } from './entities';
 import { GameImage } from './game-image';
 import { RichText } from './rich-text';
 
-/**
- * One hover card for the whole page. Icons carry data-hover="u:key" (champion),
- * "i:key" (item), "t:key:tier" (trait) or "a:key" (augment); hovering or focusing
- * one opens its card above it after a short delay. Touch doesn't open cards.
- */
+/** One hover card per page, for icons with data-hover="u:key" | "i:key" | "t:key:tier" | "a:key"; touch never opens it. */
 const OPEN_DELAY = 180;
 const CLOSE_DELAY = 60;
 
 /** The open card and its icon: a popover holding the icon counts a press in the card as inside itself. */
 export const openCard: { anchor: HTMLElement | null; card: HTMLElement | null } = { anchor: null, card: null };
+
+function Head({ icon, name, sub }: { icon: ReactNode; name: string; sub: ReactNode }) {
+  return (
+    <div className="flex items-center gap-3">
+      {icon}
+      <div className="min-w-0">
+        <div className="text-[15px] font-semibold leading-tight">{name}</div>
+        {sub}
+      </div>
+    </div>
+  );
+}
 
 function Card({ spec }: { spec: string }) {
   const [kind, key, tierText] = spec.split(':');
@@ -34,15 +42,11 @@ function Card({ spec }: { spec: string }) {
     const ability = text?.abilities[champion.key];
     return (
       <div className="space-y-3">
-        <div className="flex items-center gap-3">
-          <Portrait champion={champion} px={48} />
-          <div className="min-w-0">
-            <div className="text-[15px] font-semibold leading-tight">{champion.name}</div>
-            <div className="mt-0.5 text-xs" style={{ color: costColor(champion.cost) }}>
-              {champion.cost}-cost
-            </div>
-          </div>
-        </div>
+        <Head
+          icon={<Portrait champion={champion} px={48} />}
+          name={champion.name}
+          sub={<div className="mt-0.5 text-xs" style={{ color: costColor(champion.cost) }}>{champion.cost}-cost</div>}
+        />
         <div className="flex flex-wrap gap-1.5">
           {champion.traits.map((t) => {
             const trait = index.trait(t);
@@ -69,13 +73,11 @@ function Card({ spec }: { spec: string }) {
     if (!item) return null;
     return (
       <div className="space-y-3">
-        <div className="flex items-center gap-3">
-          <GameImage src={item.icon} alt={item.name} className="size-11 rounded-lg" />
-          <div className="min-w-0">
-            <div className="text-[15px] font-semibold leading-tight">{item.name}</div>
-            <div className="mt-0.5 text-xs text-lichen">{ITEM_CATEGORY_LABEL[item.category]}</div>
-          </div>
-        </div>
+        <Head
+          icon={<GameImage src={item.icon} alt={item.name} className="size-11 rounded-lg" />}
+          name={item.name}
+          sub={<div className="mt-0.5 text-xs text-lichen">{ITEM_CATEGORY_LABEL[item.category]}</div>}
+        />
         {item.composition.length > 0 && (
           <div className="flex items-center gap-1.5 text-xs text-lichen">
             {item.composition.map((c, i) => {
@@ -103,13 +105,11 @@ function Card({ spec }: { spec: string }) {
     const desc = text?.traits[trait.key];
     return (
       <div className="space-y-3">
-        <div className="flex items-center gap-3">
-          <TraitHex trait={trait} style={styleFor(trait, tier || trait.effects.length)} px={40} />
-          <div>
-            <div className="text-[15px] font-semibold leading-tight">{trait.name}</div>
-            <div className="mt-0.5 text-xs capitalize text-lichen">{traitKindLabel(trait)}</div>
-          </div>
-        </div>
+        <Head
+          icon={<TraitHex trait={trait} style={styleFor(trait, tier || trait.effects.length)} px={40} />}
+          name={trait.name}
+          sub={<div className="mt-0.5 text-xs capitalize text-lichen">{traitKindLabel(trait)}</div>}
+        />
         {desc && desc.desc.length > 0 && (
           <div className="text-[13px] text-lichen">
             <RichText value={desc.desc.slice(0, 40)} />
@@ -157,10 +157,13 @@ export function HoverCards() {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const card = useRef<HTMLDivElement>(null);
   const current = useRef<HTMLElement | null>(null);
+  const close = () => {
+    current.current = null;
+    setOpen(null);
+  };
 
   useEffect(() => {
-    // Like one hover card per icon: leaving an icon (or its card) closes the card after
-    // CLOSE_DELAY, resting on another icon opens that one's card after OPEN_DELAY.
+    // Leaving an icon (or its card) closes after CLOSE_DELAY; resting on another opens its card after OPEN_DELAY.
     let openTimer = 0;
     let closeTimer = 0;
     let opened = 0;
@@ -187,13 +190,9 @@ export function HoverCards() {
     };
     const hide = () => {
       window.clearTimeout(closeTimer);
-      closeTimer = window.setTimeout(() => {
-        current.current = null;
-        setOpen(null);
-      }, CLOSE_DELAY);
+      closeTimer = window.setTimeout(close, CLOSE_DELAY);
     };
-    // The icon the pointer is in: only entering an icon opens its card (as pointerenter would),
-    // so moving about inside one after its card was dismissed doesn't bring the card back.
+    // Only entering an icon opens its card, so moving inside one after a dismissal doesn't bring it back.
     let hovered: HTMLElement | null = null;
     const over = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return;
@@ -227,74 +226,50 @@ export function HoverCards() {
     const dismiss = () => {
       window.clearTimeout(openTimer);
       pending = null;
-      if (!current.current) return;
-      current.current = null;
-      setOpen(null);
+      if (current.current) close();
     };
     const escape = (e: KeyboardEvent) => {
-      // An open card is the top layer: Escape closes it (and not a popover under it).
+      // An open card is the top layer: Escape closes it, not a popover under it.
       if (e.key !== 'Escape' || !current.current) return;
       e.preventDefault();
       window.clearTimeout(closeTimer);
-      current.current = null;
-      setOpen(null);
+      close();
     };
     const press = (e: PointerEvent) => {
       if (!inCard(e.target)) dismiss();
     };
-    // A click on the card counts as a click on whatever holds its icon (a table row, a comp link,
-    // a search hit), as it did when each icon rendered its own card inside those.
+    // A click on the card counts as a click on whatever holds its icon (a table row, a comp link, a search hit).
     const click = (e: MouseEvent) => {
       const holder = current.current?.parentElement;
       if (!holder || !inCard(e.target)) return;
-      const copy = new MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        detail: e.detail,
-        screenX: e.screenX,
-        screenY: e.screenY,
-        clientX: e.clientX,
-        clientY: e.clientY,
-        button: e.button,
-        buttons: e.buttons,
-        ctrlKey: e.ctrlKey,
-        shiftKey: e.shiftKey,
-        altKey: e.altKey,
-        metaKey: e.metaKey,
-      });
+      const { detail, screenX, screenY, clientX, clientY, button, buttons, ctrlKey, shiftKey, altKey, metaKey } = e;
+      const init = { detail, screenX, screenY, clientX, clientY, button, buttons, ctrlKey, shiftKey, altKey, metaKey };
+      const copy = new MouseEvent('click', { ...init, bubbles: true, cancelable: true, view: window });
       // Page handlers run; the browser's own action (following a link) does not.
       const keep = (ev: Event) => ev === copy && ev.preventDefault();
       window.addEventListener('click', keep);
       holder.dispatchEvent(copy);
       window.removeEventListener('click', keep);
     };
-    document.addEventListener('pointerover', over);
-    document.addEventListener('pointerout', out);
-    document.addEventListener('focusin', focusIn);
-    document.addEventListener('focusout', focusOut);
-    document.addEventListener('keydown', escape);
-    document.addEventListener('pointerdown', press);
-    document.addEventListener('click', click);
+    const ctl = new AbortController();
+    const opts = { signal: ctl.signal };
+    document.addEventListener('pointerover', over, opts);
+    document.addEventListener('pointerout', out, opts);
+    document.addEventListener('focusin', focusIn, opts);
+    document.addEventListener('focusout', focusOut, opts);
+    document.addEventListener('keydown', escape, opts);
+    document.addEventListener('pointerdown', press, opts);
+    document.addEventListener('click', click, opts);
     return () => {
       window.clearTimeout(openTimer);
       window.clearTimeout(closeTimer);
-      document.removeEventListener('pointerover', over);
-      document.removeEventListener('pointerout', out);
-      document.removeEventListener('focusin', focusIn);
-      document.removeEventListener('focusout', focusOut);
-      document.removeEventListener('keydown', escape);
-      document.removeEventListener('pointerdown', press);
-      document.removeEventListener('click', click);
+      ctl.abort();
     };
   }, []);
 
   // A new page never keeps the last page's card.
   const path = usePathname();
-  useEffect(() => {
-    current.current = null;
-    setOpen(null);
-  }, [path]);
+  useEffect(close, [path]);
 
   // Above the icon (below when only that fits), kept 12px inside the window sideways; it follows the icon.
   useLayoutEffect(() => {
@@ -302,10 +277,7 @@ export function HoverCards() {
     const place = () => {
       const box = card.current;
       if (!box) return;
-      if (!open.el.isConnected) {
-        current.current = null;
-        return setOpen(null);
-      }
+      if (!open.el.isConnected) return close();
       const { top, left } = placeFloating(open.el.getBoundingClientRect(), floatingSize(box), 'top', 'center');
       setPos((p) => (p && p.top === top && p.left === left ? p : { top, left }));
     };
@@ -313,27 +285,24 @@ export function HoverCards() {
     const ro = new ResizeObserver(place);
     if (card.current) ro.observe(card.current);
     ro.observe(open.el);
-    // The page changing under the card: follow the icon, show what it now stands for, or close
-    // when it is gone (the card belongs to its icon).
+    // The page changing under the card: follow the icon, show what it now stands for, or close when it is gone.
     const mo = new MutationObserver(() => {
       const spec = open.el.isConnected ? open.el.dataset.hover : undefined;
-      if (!spec) {
-        current.current = null;
-        setOpen(null);
-      } else if (spec !== open.spec) setOpen({ ...open, spec });
+      if (!spec) close();
+      else if (spec !== open.spec) setOpen({ ...open, spec });
       else place();
     });
     mo.observe(document.body, { childList: true, subtree: true, characterData: true });
     mo.observe(open.el, { attributes: true, attributeFilter: ['data-hover'] });
-    window.addEventListener('scroll', place, true);
-    window.addEventListener('resize', place);
+    const ctl = new AbortController();
+    window.addEventListener('scroll', place, { capture: true, signal: ctl.signal });
+    window.addEventListener('resize', place, { signal: ctl.signal });
     openCard.anchor = open.el;
     openCard.card = card.current;
     return () => {
       ro.disconnect();
       mo.disconnect();
-      window.removeEventListener('scroll', place, true);
-      window.removeEventListener('resize', place);
+      ctl.abort();
       openCard.anchor = openCard.card = null;
     };
   }, [open]);

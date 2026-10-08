@@ -1,17 +1,18 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { FlaskConical, Hexagon } from '@/components/icons';
+import { TypicalBoardPanel } from '@/components/game/board-expander';
 import { ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
 import { AvgPlace, CompName, GradeBadge, SummaryTiles } from '@/components/stats/bits';
 import { EntityTable, ScopeBar } from '@/components/stats/table';
 import { ButtonLink, DetailHero, Panel } from '@/components/ui';
-import { autoPlace, encodeBoard } from '@/lib/builder';
+import { encodeBoard } from '@/lib/builder';
+import { compBoard } from '@/lib/placement';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
 import { indexStatic, splashSources } from '@/lib/static';
 import { getStaticData } from '@/lib/static/load';
 import { encodeFilters } from '@/lib/stats/filters';
-import { getComp } from '@/lib/stats/service';
+import { getComp, resolveCompId } from '@/lib/stats/service';
 import type { Filter } from '@/lib/stats/types';
 import { fmt } from '@/lib/utils';
 
@@ -26,23 +27,25 @@ export async function generateMetadata({ params, searchParams }: { params: Param
   return {
     title: result.comp.name,
     description: `How ${result.comp.name} performs in ranked TFT: core units, carry items, levels and placements.`,
+    alternates: { canonical: `/comps/${id}` },
   };
 }
 
 export default async function CompPage({ params, searchParams }: { params: Params; searchParams: SearchParams }) {
   const [{ id }, sp] = await Promise.all([params, searchParams]);
-  if (!/^[a-z0-9-]{1,80}$/.test(id)) notFound();
+  if (!/^[a-z0-9-]{1,200}$/.test(id)) notFound();
   const result = await getComp(id, scopeFrom(sp));
-  if (!result) notFound();
+  if (!result) {
+    // Comp ids are regrouped on every data refresh: send old links to the matching comp, or back to the tier list, not a 404.
+    const current = await resolveCompId(id).catch(() => null);
+    if (current && current !== id) redirect(`/comps/${current}`);
+    redirect('/meta');
+  }
   const index = indexStatic(await getStaticData());
   const { comp } = result;
 
-  const core = comp.units.filter((u) => u.freq >= 0.5);
-  const board = autoPlace(
-    (core.length >= 4 ? core : comp.units).slice(0, 10).map((u) => ({ key: u.id, star: u.star, items: u.items })),
-    index,
-  );
-  const builderHref = `/builder?b=${encodeBoard(board, Math.round(comp.level))}`;
+  // The builder opens on the typical board the page shows, every unit of it (Lux keeps the trait she plays as).
+  const builderHref = `/builder?b=${encodeBoard(compBoard(comp.units, index), Math.round(comp.level))}`;
   const filters: Filter[] = [];
   if (comp.trait) {
     const t = comp.traits.find((x) => x.id === comp.trait);
@@ -51,8 +54,7 @@ export default async function CompPage({ params, searchParams }: { params: Param
   if (comp.carry) filters.push({ k: 'unit', id: comp.carry });
   const explorerHref = `/explorer?f=${encodeFilters(filters)}`;
   const carry = result.carry ? index.champion(result.carry) : undefined;
-  // Banner art: the carry's, then the art of the units built around items (most items first). Each one lists its
-  // own fallbacks, so a missing file for one champion moves on to the next candidate instead of leaving the banner bare.
+  // Banner art: the carry's, then units by item count; each lists its own fallbacks so one missing file can't leave it bare.
   const byWeight = [...comp.units].sort((a, b) => b.items.length - a.items.length || b.freq - a.freq);
   const artOrder = [result.carry, ...byWeight.map((u) => u.id)].filter((k, i, all): k is string => Boolean(k) && all.indexOf(k) === i);
   const backdrop = [
@@ -84,16 +86,14 @@ export default async function CompPage({ params, searchParams }: { params: Param
         }
       >
         <div className="flex flex-wrap gap-x-4 gap-y-2">
-          {comp.traits.map((t) => (
-            <TraitBadge key={t.id} id={t.id} tier={t.tier} count={t.count} size={26} showName />
-          ))}
+          {comp.traits.map((t) => <TraitBadge key={t.id} id={t.id} tier={t.tier} count={t.count} size={26} showName />)}
         </div>
       </DetailHero>
 
       <SummaryTiles summary={summary} playRate={comp.freq} />
 
-      <Panel title="Typical board" aside={<span className="text-xs">Share of boards running each unit, average level {comp.level.toFixed(1)}</span>}>
-        <div className="flex flex-wrap gap-x-4 gap-y-6">
+      <TypicalBoardPanel units={comp.units}>
+        <div className="flex flex-wrap content-start gap-x-4 gap-y-6">
           {comp.units.map((u) => (
             <div key={u.id} className="flex w-[74px] flex-col items-center gap-1.5">
               {/* Same height with or without items, so the names underneath line up. */}
@@ -108,7 +108,7 @@ export default async function CompPage({ params, searchParams }: { params: Param
             </div>
           ))}
         </div>
-      </Panel>
+      </TypicalBoardPanel>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {carry && (
@@ -131,9 +131,7 @@ export default async function CompPage({ params, searchParams }: { params: Param
                 {result.carryBuilds.map((b) => (
                   <li key={b.items.join('+')} className="flex items-center gap-3 border-t hairline px-4 py-3 first:border-t-0 sm:px-5">
                     <span className="flex gap-1">
-                      {b.items.map((it, i) => (
-                        <ItemIcon key={`${it}-${i}`} id={it} px={32} />
-                      ))}
+                      {b.items.map((it, i) => <ItemIcon key={`${it}-${i}`} id={it} px={32} />)}
                     </span>
                     <span className="ml-auto grid grid-cols-3 gap-4 text-right text-sm">
                       <AvgPlace value={b.avg} />
@@ -150,13 +148,6 @@ export default async function CompPage({ params, searchParams }: { params: Param
           </Panel>
         </div>
       </div>
-
-      <p className="text-sm text-lichen">
-        Boards are grouped by their carries: the champions holding the damage items.{' '}
-        <Link href="/meta" className="font-medium text-wisp hover:underline">
-          Back to the tier list
-        </Link>
-      </p>
     </div>
   );
 }

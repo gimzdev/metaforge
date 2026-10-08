@@ -27,6 +27,8 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   return {
     title: item.name,
     description: `Who should hold ${item.name} in TFT, what it pairs with and how it performs in ranked games.`,
+    // The page also answers to api names and match-data aliases; the slug is the address to index.
+    alternates: { canonical: `/items/${item.slug}` },
   };
 }
 
@@ -42,7 +44,6 @@ export default async function ItemPage({ params, searchParams }: { params: Param
   const explorerHref = `/explorer?tab=units&f=${encodeFilters([{ k: 'item', id: item.key }])}`;
   const minN = Math.max(3, Math.round(stats.summary.boards * 0.01));
 
-  // Recipes this component is part of.
   const buildsInto =
     item.category === 'component'
       ? data.items
@@ -84,14 +85,14 @@ export default async function ItemPage({ params, searchParams }: { params: Param
         <div className="space-y-6">
           {hasStats ? <SummaryTiles summary={stats.summary} playRate={playRate} /> : <NoStatsNotice what={`${item.name} stats`} />}
           {hasStats && (
-            <Panel title="Best holders" aside={<span className="text-xs">Share of boards with the item</span>} flush>
-              <EntityTable kind="unit" rows={stats.holders} minN={minN} freqLabel="Holds it" limit={15} />
-            </Panel>
-          )}
-          {hasStats && (
-            <Panel title="Paired with" aside={<span className="text-xs">Other items on the same champion</span>} flush>
-              <EntityTable kind="item" rows={stats.partners} minN={minN} freqLabel="Paired" limit={15} />
-            </Panel>
+            <>
+              <Panel title="Best holders" aside={<span className="text-xs">Share of boards with the item</span>} flush>
+                <EntityTable kind="unit" rows={stats.holders} minN={minN} freqLabel="Holds it" limit={15} />
+              </Panel>
+              <Panel title="Paired with" aside={<span className="text-xs">Other items on the same champion</span>} flush>
+                <EntityTable kind="item" rows={stats.partners} minN={minN} freqLabel="Paired" limit={15} />
+              </Panel>
+            </>
           )}
         </div>
         <aside className="space-y-6">
@@ -102,9 +103,7 @@ export default async function ItemPage({ params, searchParams }: { params: Param
             {item.unique && <div className="mt-3 text-xs text-fog">Unique: one per champion.</div>}
             {item.traits.length > 0 && (
               <div className="mt-4 flex flex-wrap gap-2">
-                {item.traits.map((t) => (
-                  <TraitBadge key={t} id={t} tier={1} size={24} showName showCount={false} />
-                ))}
+                {item.traits.map((t) => <TraitBadge key={t} id={t} tier={1} size={24} showName showCount={false} />)}
               </div>
             )}
           </Panel>

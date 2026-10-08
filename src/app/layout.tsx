@@ -9,27 +9,34 @@ import { Providers } from '@/components/providers';
 import { SiteBackdrop, SiteHeader } from '@/components/site-header';
 import { getSession } from '@/lib/auth';
 import { env } from '@/lib/env';
-import { brand } from '@/lib/site';
 import { liteStatic, staticTextVersion, tryGetStaticData } from '@/lib/static/load';
 
 export const dynamic = 'force-dynamic';
 
+/** Canonical links and link previews are built on APP_URL; a value that is not a URL must not take every page down. */
+function siteUrl(): URL | undefined {
+  try {
+    return new URL(env.appUrl);
+  } catch {
+    console.error(`[metaforge] APP_URL "${env.appUrl}" is not a URL (it needs https://)`);
+    return undefined;
+  }
+}
+
 export const metadata: Metadata = {
-  metadataBase: new URL(env.appUrl),
+  metadataBase: siteUrl(),
   title: { default: 'MetaForge | Tools for Tacticians', template: 'MetaForge | %s' },
-  description:
-    'Teamfight Tactics meta report, comp tier list, stats explorer, team builder and player lookup, built from ranked games.',
+  description: 'Teamfight Tactics meta report, comp tier list, stats explorer, team builder and player lookup, built from ranked games.',
+  // The preview image is app/opengraph-image.jpg (written by the installer); X/Twitter shows it large.
   openGraph: { siteName: 'MetaForge', type: 'website' },
-  icons: { icon: brand.logo || '/icon.svg', apple: brand.logo || undefined },
+  twitter: { card: 'summary_large_image' },
+  // Tab icon: src/app/favicon.ico (16/32/48). Phones use app/apple-icon.tsx, rendered from your logo. Next adds the <link> tags itself.
+  appleWebApp: { title: 'MetaForge', capable: true, statusBarStyle: 'black-translucent' },
 };
 
 export const viewport: Viewport = { themeColor: '#0f0d0b', colorScheme: 'dark' };
 
-/**
- * Runs before any image loads. A picture the image optimizer fails to deliver (an outage, a plan's
- * limit) quietly loads its original instead, unseen by the page's own handlers; game art that
- * still fails shows its monogram (see GameImage).
- */
+/** Runs before any image loads: an optimizer failure falls back to the original; game art that still fails shows its monogram (GameImage). */
 const IMAGE_FALLBACK = `(function(){function f(e,b){var t=e.target;if(!t||t.tagName!=='IMG')return;var m=b&&/^\\/_next\\/image\\?url=([^&]+)/.exec(t.getAttribute('src')||'');if(m){t.removeAttribute('srcset');t.src=decodeURIComponent(m[1]);e.stopPropagation();return}var p=t.parentNode;if(p&&p.classList&&p.classList.contains('gi')){if(b)p.setAttribute('data-broken','');else p.removeAttribute('data-broken')}}addEventListener('error',function(e){f(e,1)},true);addEventListener('load',function(e){f(e,0)},true)})()`;
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
@@ -50,8 +57,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             session={session ? { puuid: session.puuid, gameName: session.gameName, tagLine: session.tagLine } : null}
             rsoEnabled={env.rsoEnabled}
           >
+            <a href="#main" className="fixed left-4 top-3 z-50 -translate-y-24 rounded-lg bg-wisp px-4 py-2 text-sm font-semibold text-[#1b1306] focus:translate-y-0">
+              Skip to content
+            </a>
             <SiteHeader />
-            <main className="mx-auto min-h-[70vh] max-w-[1400px] px-4 pb-10 pt-10 sm:px-6">{children}</main>
+            <main id="main" className="mx-auto min-h-[70vh] max-w-[1400px] scroll-mt-28 px-4 pb-10 pt-10 sm:px-6">{children}</main>
             <SiteFooter />
           </Providers>
         ) : (

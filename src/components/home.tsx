@@ -10,9 +10,6 @@ import { getMeta, statMap } from '@/lib/stats/service';
 import { itemMinSample } from '@/lib/stats/tiers';
 import type { Scope } from '@/lib/stats/types';
 
-/* Home page pieces and the shared body of the /units, /items and /traits pages. */
-
-/** Section opener: numbered label, serif title, hairline underneath. */
 export function SectionHead({ label, title }: { label: string; title: ReactNode }) {
   return (
     <div className="mb-7 flex scroll-mt-32 flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b border-line pb-5">
@@ -24,7 +21,6 @@ export function SectionHead({ label, title }: { label: string; title: ReactNode 
   );
 }
 
-/** One column of the tools row: number, title, a line of copy and a live detail. */
 export function ToolColumn({
   n,
   href,
@@ -42,9 +38,7 @@ export function ToolColumn({
     <Link href={href} className="group flex flex-col gap-3 py-6 md:px-8 md:py-2 md:first:pl-0 md:last:pr-0">
       <span className="num font-display text-sm italic text-fog">{n}</span>
       <span className="flex items-center justify-between gap-3">
-        <span className="font-display text-[1.6rem] leading-tight text-moon transition-colors group-hover:text-wisp">
-          {title}
-        </span>
+        <span className="font-display text-[1.6rem] leading-tight text-moon transition-colors group-hover:text-wisp">{title}</span>
         <ArrowUpRight
           className="size-5 shrink-0 text-fog transition-all group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-wisp"
           aria-hidden
@@ -56,7 +50,6 @@ export function ToolColumn({
   );
 }
 
-/** Large picture tile with the title set over the art (Guides, Ladder). */
 export function ImageTile({
   href,
   art,
@@ -100,11 +93,8 @@ export function ImageTile({
   );
 }
 
-/* ── Patch highlights ticker ───────────────────────────── */
-
 export interface CarouselItem {
   key: string;
-  /** e.g. "Most played item" */
   title: string;
   kind: 'unit' | 'item' | 'trait' | 'comp';
   /** Champion, item or trait key; for comps, the carry */
@@ -118,10 +108,8 @@ export interface CarouselItem {
 }
 
 function Icon({ item }: { item: CarouselItem }) {
-  if (item.kind === 'unit') return <ChampionIcon id={item.entity} size="sm" link={false} hover={false} />;
   if (item.kind === 'item') return <ItemIcon id={item.entity} px={30} link={false} hover={false} />;
-  if (item.kind === 'trait')
-    return <TraitBadge id={item.entity} tier={item.tier} size={30} link={false} hover={false} showCount={false} />;
+  if (item.kind === 'trait') return <TraitBadge id={item.entity} tier={item.tier} size={30} link={false} hover={false} showCount={false} />;
   return <ChampionIcon id={item.entity} size="sm" link={false} hover={false} />;
 }
 
@@ -145,20 +133,16 @@ function Entry({ item, copy }: { item: CarouselItem; copy: boolean }) {
   );
 }
 
-/**
- * A running ticker of the patch's standout champions, comps, items and traits.
- * Slows to a crawl on hover; becomes a scrollable row when motion is reduced.
- */
+/** Ticker of the patch's standout champions, comps, items and traits; slows on hover, scrolls when motion is reduced. */
 export function StatsCarousel({ items }: { items: CarouselItem[] }) {
   if (items.length < 3) return null;
-  const duration = Math.max(50, items.length * 7);
   return (
     <div
       className="marquee-viewport relative -mx-4 overflow-hidden border-y border-line py-3 [mask-image:linear-gradient(to_right,transparent,black_6%,black_94%,transparent)] sm:-mx-6"
       aria-label="Patch highlights"
       role="region"
     >
-      <MarqueeTrack duration={duration}>
+      <MarqueeTrack duration={Math.max(50, items.length * 7)}>
         {items.map((item) => (
           <Entry key={`a-${item.key}`} item={item} copy={false} />
         ))}
@@ -170,7 +154,6 @@ export function StatsCarousel({ items }: { items: CarouselItem[] }) {
   );
 }
 
-/** Shared body of the /units, /items and /traits index pages. */
 export async function CollectionPage({
   tab,
   title,

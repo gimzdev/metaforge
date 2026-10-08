@@ -35,12 +35,7 @@ function lookup<T extends { key: string; slug?: string }>(list: T[]) {
 
 /** Words that identify an emblem's trait in ids like DA_18_EmblemSlayer or TFT18_Item_SlayerEmblemItem. */
 export function emblemToken(key: string): string {
-  return key
-    .toLowerCase()
-    .replace(/^(tft\d*_item_|tft\d*_|da_\d*_?)/, '')
-    .replace(/^emblem/, '')
-    .replace(/(emblemitem|emblem|item)$/, '')
-    .replace(/[^a-z0-9]/g, '');
+  return compact(key.toLowerCase().replace(/^(tft\d*_item_|tft\d*_|da_\d*_?)/, '').replace(/^emblem/, '').replace(/(emblemitem|emblem|item)$/, ''));
 }
 
 export function indexStatic<D extends StaticLite>(data: D): StaticIndex<D> {
@@ -79,10 +74,7 @@ export function setPageStatic(data: StaticLite) {
   pageData = data;
 }
 
-/**
- * Game data without a hook or a prop: the page's lite data in client components, the
- * server's copy in server components (pages load it with getStaticData() before rendering).
- */
+/** Game data without a hook or prop: the page's lite data in client components, the server's copy in server components. */
 export function currentIndex(): StaticIndex {
   const bag = (globalThis as { __metaforge?: Record<string, { data?: StaticLite | null } | undefined> }).__metaforge;
   const data = pageData ?? bag?.['static-data']?.data;
@@ -96,14 +88,10 @@ const CDRAGON = 'https://raw.communitydragon.org/latest/game/';
 
 /** Game art is stored as a path under CommunityDragon's game folder; full URLs pass through. */
 export function cdn(path: string | null | undefined): string | null {
-  if (!path) return null;
-  return /^https?:\/\//.test(path) ? path : CDRAGON + path;
+  return !path ? null : /^https?:\/\//.test(path) ? path : CDRAGON + path;
 }
 
-/**
- * Wide art for a champion's page banner, as CommunityDragon URLs in the order to try them: the splash and its
- * usual sibling files, then (unless `portraits` is false) the small portraits, which are the last resort.
- */
+/** Banner art URLs in the order to try them: the splash and its usual siblings, then (unless `portraits` is false) portraits. */
 export function splashSources(
   c: { splash: string | null; tile?: string | null; icon?: string | null } | undefined | null,
   { portraits = true }: { portraits?: boolean } = {},
@@ -130,9 +118,5 @@ export function styleFor(trait: TraitLite, tier?: number, matchStyle?: number): 
 export const traitKindLabel = (t: TraitLite) => (t.kind === 'trait' ? 'synergy' : t.kind);
 
 export function plainText(rich: RichText | undefined): string {
-  return (rich ?? [])
-    .map((s) => (s.k === 'n' ? ' ' : (s.v ?? '')))
-    .join('')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (rich ?? []).map((s) => (s.k === 'n' ? ' ' : (s.v ?? ''))).join('').replace(/\s+/g, ' ').trim();
 }

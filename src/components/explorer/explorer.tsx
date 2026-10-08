@@ -1,15 +1,17 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowUpRight, Ban, Check, Link2, Plus, Search, SearchX, TriangleAlert } from '@/components/icons';
 import { ChampionIcon, ItemIcon } from '@/components/game/entities';
 import { AvgPlace, CompLine, CompLineHeader, Delta, EntityCell, PlacementBars, type EntityKind } from '@/components/stats/bits';
 import { gamesColumn, rowHref, rowName, ScopeBar, statColumns, StatsTable, type Column } from '@/components/stats/table';
 import { Chip, Segmented, Select } from '@/components/ui';
-import { costColor, currentIndex } from '@/lib/static';
+import { costColor, currentIndex, type StaticIndex } from '@/lib/static';
 import type { ItemCategory, TraitLite } from '@/lib/static/types';
-import { encodeFilters, filterKey, filterSignature, type ExplorerTab } from '@/lib/stats/filters';
+import { normalizePlatform } from '@/lib/riot/regions';
+import { cleanKey, decodeFilters, encodeFilters, EXPLORER_TABS, filterKey, filterSignature, type ExplorerTab } from '@/lib/stats/filters';
 import type { CompRow, ExplorerResult, Filter, Scope, StatRow } from '@/lib/stats/types';
 import { cn, fmt, sleep, traitOf } from '@/lib/utils';
 import { describeFilter, FilterBar } from './filter-bar';
@@ -32,8 +34,15 @@ const TRAIT_KINDS: Array<{ id: TraitLite['kind']; label: string }> = [
 const MIN_GAMES = [1, 5, 10, 25, 50, 100, 250, 500];
 
 function autoMinGames(boards: number) {
-  if (boards < 60) return 1;
-  return Math.min(100, Math.max(3, Math.round(boards * 0.002)));
+  return boards < 60 ? 1 : Math.min(100, Math.max(3, Math.round(boards * 0.002)));
+}
+
+/** A stats row's name as people say it ("4 Sniper", "level 9"), for the row's buttons. */
+function rowLabel(index: StaticIndex, kind: EntityKind, r: StatRow): string {
+  if (kind === 'level') return `level ${r.id}`;
+  if (kind !== 'trait') return rowName(kind, r);
+  const t = index.trait(traitOf(r.id));
+  return t ? `${t.effects[(r.tier ?? 1) - 1]?.minUnits ?? ''} ${t.name}`.trim() : r.id;
 }
 
 async function fetchExplorer(scope: Scope, filters: Filter[], signal: AbortSignal): Promise<ExplorerResult> {
@@ -45,11 +54,16 @@ async function fetchExplorer(scope: Scope, filters: Filter[], signal: AbortSigna
         body: JSON.stringify({ region: scope.region, patch: scope.patch, filters }),
         signal,
       });
-      const json = (await res.json().catch(() => ({}))) as ExplorerResult & { error?: string };
+      const json = (await res.json().catch(() => ({}))) as Partial<ExplorerResult> & { error?: string };
       if (!res.ok) throw new Error(json.error ?? `Explorer request failed (${res.status})`);
-      return json;
+      // A proxy or an outage page can answer 200 with something else: never hand that to the page.
+      if (!json.summary) throw new Error('The explorer sent back an unreadable answer.');
+      return json as ExplorerResult;
     } catch (error) {
-      if (signal.aborted || attempt > 0) throw error;
+      if (signal.aborted || attempt > 0) {
+        // fetch rejects with a TypeError when the network is down ("Failed to fetch", "Load failed").
+        throw error instanceof TypeError ? new Error('Could not reach MetaForge. Check your connection.') : error;
+      }
       await sleep(1000); // one retry
     }
   }
@@ -59,11 +73,7 @@ async function fetchExplorer(scope: Scope, filters: Filter[], signal: AbortSigna
 const FRESH_MS = 2 * 60_000;
 const KEEP_MS = 5 * 60_000;
 
-/**
- * Results for the current scope and filters. Switching back to a filter set shows its answer
- * at once (asking again in the background once it is two minutes old); a new one shows the
- * previous answer while it loads.
- */
+/** Cached answers show at once (refetched in the background when stale); a new filter set shows the previous answer while it loads. */
 function useExplorer(initial: ExplorerResult, initialFilters: Filter[], scope: Scope, filters: Filter[]) {
   const signature = `${scope.region}|${scope.patch}|${filterSignature(filters)}`;
   const first = useRef(`${initial.scope.region}|${initial.scope.patch}|${filterSignature(initialFilters)}`).current;
@@ -74,11 +84,10 @@ function useExplorer(initial: ExplorerResult, initialFilters: Filter[], scope: S
   const forced = useRef(false);
   useEffect(() => {
     const map = cache.current!;
+    // Forget every answer left more than KEEP_MS ago, not only this one: a long session would keep them all.
+    const now = Date.now();
+    for (const [key, entry] of map) if (entry.left !== null && now - entry.left > KEEP_MS) map.delete(key);
     let hit = map.get(signature);
-    if (hit?.left && Date.now() - hit.left > KEEP_MS) {
-      map.delete(signature);
-      hit = undefined;
-    }
     // The page's own answer comes back as new when it was forgotten.
     if (!hit && signature === first) map.set(signature, (hit = { data: initial, at: Date.now(), left: null }));
     if (hit) {
@@ -107,11 +116,11 @@ function useExplorer(initial: ExplorerResult, initialFilters: Filter[], scope: S
       ctrl.abort();
       leave();
     };
-  }, [signature, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [signature, attempt]);
   return {
     data: state.data,
     fetching: state.fetching,
-    /** Still showing the previous answer while this one loads. */
+    // Still showing the previous answer while this one loads.
     stale: state.key !== signature,
     error: state.error,
     retry: () => {
@@ -121,7 +130,6 @@ function useExplorer(initial: ExplorerResult, initialFilters: Filter[], scope: S
   };
 }
 
-/* ── Summary strip ──────────────────────────────────────── */
 function SummaryStrip({ data, filtered }: { data: ExplorerResult; filtered: boolean }) {
   const s = data.summary;
   const b = data.baseline;
@@ -129,46 +137,36 @@ function SummaryStrip({ data, filtered }: { data: ExplorerResult; filtered: bool
   const pp = (x: number, y: number) => {
     const d = (x - y) * 100;
     if (!Number.isFinite(d) || Math.abs(d) < 0.05) return null;
-    return (
-      <span className={cn('num text-xs', d > 0 ? 'text-good' : 'text-bloom')}>
-        {d > 0 ? '+' : ''}
-        {d.toFixed(1)} pts
-      </span>
-    );
+    return <span className={cn('num text-xs', d > 0 ? 'text-good' : 'text-bloom')}>{`${d > 0 ? '+' : ''}${d.toFixed(1)} pts`}</span>;
   };
+  const stat = (label: string, value: ReactNode, delta: ReactNode, sub: string) => (
+    <div className="bg-canopy px-4 py-3.5">
+      <div className="text-xs text-lichen">{label}</div>
+      <div className="mt-0.5 flex items-baseline gap-2">
+        {value}
+        {filtered && s.boards > 0 && delta}
+      </div>
+      <div className="text-xs text-fog">{sub}</div>
+    </div>
+  );
+  const big = 'num font-display text-[1.6rem] leading-none';
   return (
     <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border hairline bg-lichen/10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)]">
       <div className="bg-canopy px-4 py-3.5">
         <div className="text-xs text-lichen">{filtered ? 'Matching boards' : 'Boards'}</div>
-        <div className="num mt-1 font-display text-[1.6rem] leading-none">{fmt.int(s.boards)}</div>
+        <div className={cn(big, 'mt-1')}>{fmt.int(s.boards)}</div>
         <div className="num text-xs text-fog">
           {filtered ? `${fmt.pct(share, share < 0.01 ? 2 : 1)} of ${fmt.int(b.boards)}` : 'final boards in scope'}
         </div>
       </div>
-      <div className="bg-canopy px-4 py-3.5">
-        <div className="text-xs text-lichen">Average place</div>
-        <div className="mt-0.5 flex items-baseline gap-2">
-          <AvgPlace value={s.avg} className="font-display text-[1.6rem] leading-none" />
-          {filtered && s.boards > 0 && <Delta value={s.avg - b.avg} />}
-        </div>
-        <div className="text-xs text-fog">{filtered ? `all boards ${fmt.place(b.avg)}` : 'lobby average is 4.50'}</div>
-      </div>
-      <div className="bg-canopy px-4 py-3.5">
-        <div className="text-xs text-lichen">Top 4 rate</div>
-        <div className="mt-0.5 flex items-baseline gap-2">
-          <span className="num font-display text-[1.6rem] leading-none">{fmt.pct(s.top4)}</span>
-          {filtered && s.boards > 0 && pp(s.top4, b.top4)}
-        </div>
-        <div className="text-xs text-fog">{filtered ? `all boards ${fmt.pct(b.top4)}` : 'half of every lobby'}</div>
-      </div>
-      <div className="bg-canopy px-4 py-3.5">
-        <div className="text-xs text-lichen">Win rate</div>
-        <div className="mt-0.5 flex items-baseline gap-2">
-          <span className="num font-display text-[1.6rem] leading-none">{fmt.pct(s.win)}</span>
-          {filtered && s.boards > 0 && pp(s.win, b.win)}
-        </div>
-        <div className="text-xs text-fog">{filtered ? `all boards ${fmt.pct(b.win)}` : 'one in eight on average'}</div>
-      </div>
+      {stat(
+        'Average place',
+        <AvgPlace value={s.avg} className="font-display text-[1.6rem] leading-none" />,
+        <Delta value={s.avg - b.avg} />,
+        filtered ? `all boards ${fmt.place(b.avg)}` : 'lobby average is 4.50',
+      )}
+      {stat('Top 4 rate', <span className={big}>{fmt.pct(s.top4)}</span>, pp(s.top4, b.top4), filtered ? `all boards ${fmt.pct(b.top4)}` : 'half of every lobby')}
+      {stat('Win rate', <span className={big}>{fmt.pct(s.win)}</span>, pp(s.win, b.win), filtered ? `all boards ${fmt.pct(b.win)}` : 'one in eight on average')}
       <div className="col-span-2 bg-canopy px-4 py-3 lg:col-span-1">
         <div className="text-xs text-lichen">Placements</div>
         <PlacementBars placements={s.placements} height={34} labels className="mt-1.5" />
@@ -177,15 +175,9 @@ function SummaryStrip({ data, filtered }: { data: ExplorerResult; filtered: bool
   );
 }
 
-/* ── Row actions ────────────────────────────────────────── */
-function RowActions({
-  onWith,
-  onWithout,
-  href,
-  active,
-  disabled = false,
-  withTitle = 'Only boards with this',
-}: {
+function RowActions({ name, onWith, onWithout, href, active, disabled = false, withTitle = `Only boards with ${name}` }: {
+  /** For the buttons' titles, which are also their accessible names (the icons are hidden). */
+  name: string;
   onWith: () => void;
   /** Left out where "without" has no meaning (items held by one champion). */
   onWithout?: () => void;
@@ -197,22 +189,83 @@ function RowActions({
   const btn = 'size-7 place-items-center rounded-lg text-lichen transition hover:bg-white/[0.07] disabled:opacity-40';
   return (
     <span className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
-      <button type="button" className={cn('grid', btn, 'hover:text-wisp')} onClick={onWith} title={withTitle} disabled={active || disabled}>
+      <button
+        type="button"
+        className={cn('grid', btn, 'hover:text-wisp')}
+        onClick={onWith}
+        title={active ? `${name} is in the filters` : withTitle}
+        disabled={active || disabled}
+      >
         {active ? <Check className="size-4 text-wisp" /> : <Plus className="size-4" />}
       </button>
       {onWithout ? (
-        <button type="button" className={cn('grid', btn, 'hover:text-bloom')} onClick={onWithout} title="Only boards without this">
+        <button type="button" className={cn('grid', btn, 'hover:text-bloom')} onClick={onWithout} title={`Only boards without ${name}`}>
           <Ban className="size-3.5" />
         </button>
       ) : (
         <span className="size-7" aria-hidden />
       )}
       {href && (
-        <Link href={href} className={cn(btn, 'hidden hover:text-moon sm:grid')} title="Open details" prefetch={false}>
+        <Link href={href} className={cn(btn, 'hidden hover:text-moon sm:grid')} title={`Open ${name}`} prefetch={false}>
           <ArrowUpRight className="size-4" />
         </Link>
       )}
     </span>
+  );
+}
+
+/** Which filtered champion or item the tab's rows are about, or 'any' for the whole board. */
+function HolderBar({ label, value, onChange, options, any, note }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  /** [key, icon, name] */
+  options: Array<[string, ReactNode, string]>;
+  any: string;
+  note: string;
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border hairline bg-canopy px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+      <span className="eyebrow shrink-0 text-fog">{label}</span>
+      <Segmented
+        size="sm"
+        value={value}
+        onChange={onChange}
+        options={[
+          ...options.map(([id, icon, name]) => ({
+            value: id,
+            label: (
+              <span className="inline-flex items-center gap-1.5">
+                {icon}
+                {name}
+              </span>
+            ),
+          })),
+          { value: 'any', label: any },
+        ]}
+      />
+      <span className="text-xs leading-relaxed text-fog">{note}</span>
+    </div>
+  );
+}
+
+function ChipRow<T extends string>({ all, options, value, onChange }: {
+  all: string;
+  options: Array<{ id: T; label: string }>;
+  value: T | null;
+  onChange: (v: T | null) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <Chip active={!value} onClick={() => onChange(null)}>
+        {all}
+      </Chip>
+      {options.map((o) => (
+        <Chip key={o.id} active={value === o.id} onClick={() => onChange(value === o.id ? null : o.id)}>
+          {o.label}
+        </Chip>
+      ))}
+    </div>
   );
 }
 
@@ -231,14 +284,20 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
-/* ── Main app ───────────────────────────────────────────── */
-export function ExplorerApp({
-  initial,
-  initialFilters,
-  initialTab,
-  initialHeld = null,
-  initialHolds = null,
-}: {
+/** The address bar's query for an explorer view: what the explorer writes, and what links and Back/Forward bring. */
+function explorerQuery(scope: Scope, filters: Filter[], tab: ExplorerTab, held: string | null, holds: string | null) {
+  const params = new URLSearchParams();
+  if (scope.region !== 'all') params.set('region', scope.region);
+  params.set('patch', scope.patch);
+  if (tab !== 'units') params.set('tab', tab);
+  const f = encodeFilters(filters);
+  if (f) params.set('f', f);
+  if (held) params.set('held', held);
+  if (holds) params.set('holds', holds);
+  return params.toString();
+}
+
+export function ExplorerApp({ initial, initialFilters, initialTab, initialHeld = null, initialHolds = null }: {
   initial: ExplorerResult;
   initialFilters: Filter[];
   initialTab: ExplorerTab;
@@ -266,27 +325,44 @@ export function ExplorerApp({
   const filtered = filters.length > 0;
   const hasAugments = data.meta.hasAugments;
 
-  // Keep the URL shareable without re-rendering the server page.
+  const searchParams = useSearchParams();
+  const written = useRef<string | null>(null);
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (scope.region !== 'all') params.set('region', scope.region);
-    params.set('patch', scope.patch);
-    if (tab !== 'units') params.set('tab', tab);
-    const f = encodeFilters(filters);
-    if (f) params.set('f', f);
-    if (held) params.set('held', held);
-    if (holds) params.set('holds', holds);
-    const url = `${window.location.pathname}?${params.toString()}`;
-    if (url !== `${window.location.pathname}${window.location.search}`) {
-      window.history.replaceState(window.history.state, '', url);
-    }
+    const query = explorerQuery(scope, filters, tab, held, holds);
+    written.current = query;
+    const url = `${window.location.pathname}?${query}`;
+    // No state object: Next ignores a call that passes its own history state, and its address would go stale.
+    if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(null, '', url);
   }, [scope, filters, tab, held, holds]);
+
+  // Back/Forward and links to other explorer views change the address without remounting: show what it says. Our own
+  // updates (above) come back here and are recognized.
+  useEffect(() => {
+    if (written.current === null || searchParams.toString() === written.current) return;
+    const region = searchParams.get('region');
+    const patch = searchParams.get('patch');
+    const nextScope: Scope = {
+      region: region && region !== 'all' ? (normalizePlatform(region) ?? 'none') : 'all',
+      patch: patch && /^[\w.]{1,12}$/.test(patch) ? patch : initial.scope.patch,
+    };
+    const t = searchParams.get('tab') as ExplorerTab | null;
+    const nextTab: ExplorerTab = t && EXPLORER_TABS.includes(t) ? t : 'units';
+    const nextFilters = decodeFilters(searchParams.get('f'));
+    const nextHeld = cleanKey(searchParams.get('held'));
+    const nextHolds = cleanKey(searchParams.get('holds'));
+    if (explorerQuery(nextScope, nextFilters, nextTab, nextHeld, nextHolds) === written.current) return;
+    setScope(nextScope);
+    setFilters(nextFilters);
+    setTab(nextTab);
+    setHeld(nextHeld);
+    setHolds(nextHolds);
+    setEditing(null);
+  }, [searchParams]);
 
   useEffect(() => {
     if (tab === 'augments' && !hasAugments) setTab('units');
   }, [tab, hasAugments]);
 
-  /* Filter operations */
   const upsert = (f: Filter) =>
     setFilters((list) => {
       const key = filterKey(f);
@@ -323,7 +399,6 @@ export function ExplorerApp({
   const ownUnit = (id: string) => filters.find((f): f is Extract<Filter, { k: 'unit' }> => f.k === 'unit' && f.id === id && !f.not);
   const holdsIt = (id: string) => Boolean(holdsKey && ownUnit(id)?.items?.includes(holdsKey));
 
-  /* Rows per tab */
   const unitRows = useMemo(
     () =>
       unitSource.filter((r) => {
@@ -380,7 +455,6 @@ export function ExplorerApp({
     return [...list].sort((a, b) => by[compSort](a) - by[compSort](b));
   }, [data.comps, index, needle, compSort]);
 
-  /* Columns */
   const columns = (
     kind: EntityKind,
     rows: StatRow[],
@@ -427,6 +501,7 @@ export function ExplorerApp({
         const isActive = Boolean(existing && !existing.not && JSON.stringify(existing) === JSON.stringify(f));
         return (
           <RowActions
+            name={rowLabel(index, kind, r)}
             active={isActive}
             onWith={() => upsert(f)}
             onWithout={() => upsert({ ...f, not: true } as Filter)}
@@ -472,6 +547,7 @@ export function ExplorerApp({
               const full = !on && (ownUnit(r.id)?.items?.length ?? 0) >= 3;
               return (
                 <RowActions
+                  name={name}
                   active={on}
                   disabled={full}
                   withTitle={full ? `${name} already has three items in this filter` : `Only boards where ${name} holds ${holdsName}`}
@@ -492,13 +568,15 @@ export function ExplorerApp({
             freqTitle: `Share of these boards where ${holderName} holds it`,
             copiesTitle: `Average copies ${holderName} holds`,
             actions: (r) => {
+              const name = index.item(r.id)?.name ?? r.id;
               const on = holderFilter.items?.includes(r.id) ?? false;
               const full = (holderFilter.items?.length ?? 0) >= 3;
               return (
                 <RowActions
+                  name={name}
                   active={on}
                   disabled={!on && full}
-                  withTitle={full && !on ? `${holderName} already has three items in this filter` : `Only boards where ${holderName} holds this`}
+                  withTitle={full && !on ? `${holderName} already has three items in this filter` : `Only boards where ${holderName} holds ${name}`}
                   onWith={() => upsert(holderWith(r))}
                   href={rowHref('item', r.id)}
                 />
@@ -512,15 +590,13 @@ export function ExplorerApp({
     levels: { rows: levelRows, toFilter: levelFilter, cols: columns('level', levelRows, levelFilter) },
   };
 
-  /* Suggestions when nothing is selected yet */
+  // Suggestions when nothing is selected yet.
   const suggestions = useMemo(() => {
     const out: Array<{ label: string; filter: Filter }> = [];
     const topComp = [...initial.comps].sort((a, b) => b.n - a.n)[0];
     const carry = topComp?.carry ? index.champion(topComp.carry) : undefined;
     if (carry) out.push({ label: `${carry.name} with 3 items`, filter: { k: 'unit', id: carry.key, minItems: 3 } });
-    const topTrait = [...initial.traits]
-      .filter((r) => (r.tier ?? 0) >= 2 && r.n >= 20)
-      .sort((a, b) => b.freq - a.freq)[0];
+    const topTrait = [...initial.traits].filter((r) => (r.tier ?? 0) >= 2 && r.n >= 20).sort((a, b) => b.freq - a.freq)[0];
     if (topTrait) {
       const f = traitFilter(topTrait);
       const t = index.trait((f as { id: string }).id);
@@ -528,9 +604,7 @@ export function ExplorerApp({
       if (t) out.push({ label: `${units ?? ''} ${t.name}`.trim(), filter: { ...f, max: undefined } as Filter });
     }
     out.push({ label: 'Level 9 or higher', filter: { k: 'level', min: 9 } });
-    const topItem = [...initial.items]
-      .filter((r) => index.item(r.id)?.category === 'completed')
-      .sort((a, b) => b.freq - a.freq)[0];
+    const topItem = [...initial.items].filter((r) => index.item(r.id)?.category === 'completed').sort((a, b) => b.freq - a.freq)[0];
     const item = topItem ? index.item(topItem.id) : undefined;
     if (item) out.push({ label: `Without ${item.name}`, filter: { k: 'item', id: item.key, not: true } });
     return out;
@@ -557,6 +631,8 @@ export function ExplorerApp({
 
   const empty = data.summary.boards === 0;
   const lastFilter = filters[filters.length - 1];
+  /** Showing the answer to earlier filters: this one is loading, or failed to load. */
+  const outdated = query.stale && (query.fetching || query.error !== null);
 
   let body: ReactNode;
   if (empty) {
@@ -564,9 +640,7 @@ export function ExplorerApp({
       <div className="rounded-xl border border-dashed border-line-strong p-10 text-center">
         <SearchX className="mx-auto size-8 text-fog" aria-hidden />
         <div className="mt-3 font-display text-xl">No boards match every filter</div>
-        <p className="mx-auto mt-1 max-w-md text-sm text-lichen">
-          Loosen a condition or widen the patch and region scope. Every filter has to hold at the same time.
-        </p>
+        <p className="mx-auto mt-1 max-w-md text-sm text-lichen">Loosen a condition or widen the patch and region scope. Every filter has to hold at the same time.</p>
         {lastFilter && (
           <button
             type="button"
@@ -589,7 +663,7 @@ export function ExplorerApp({
             actions={
               <button
                 type="button"
-                title="Explore boards of this comp"
+                title={`Explore boards of ${c.name}`}
                 onClick={() => {
                   const next: Filter[] = [];
                   if (c.trait) {
@@ -609,9 +683,7 @@ export function ExplorerApp({
         ))}
       </div>
     ) : (
-      <div className="rounded-xl border border-dashed border-line-strong p-10 text-center text-sm text-lichen">
-        Not enough boards to form comps with these filters yet.
-      </div>
+      <div className="rounded-xl border border-dashed border-line-strong p-10 text-center text-sm text-lichen">Not enough boards to form comps with these filters yet.</div>
     );
   } else {
     const t = tables[tab];
@@ -628,20 +700,12 @@ export function ExplorerApp({
           const f = t.toFilter(r);
           const existing = filters.find((x) => filterKey(x) === filterKey(f));
           if (!existing) return undefined;
-          if (existing.k === 'trait' && existing.min && r.tier && (r.tier < existing.min || r.tier > (existing.max ?? 99))) {
-            return undefined;
-          }
+          if (existing.k === 'trait' && existing.min && r.tier && (r.tier < existing.min || r.tier > (existing.max ?? 99))) return undefined;
           return existing.not ? 'bg-bloom/[0.06]' : 'bg-wisp/[0.06]';
         }}
         limit={tab === 'items' ? 80 : 60}
-        caption={`${tab} statistics`}
-        empty={
-          needle
-            ? `Nothing matches “${q}”.`
-            : minN > 1
-              ? `Nothing reaches ${minN} games yet. Lower the minimum games.`
-              : 'Nothing to show for this selection.'
-        }
+        caption={`${tabOptions.find((o) => o.value === tab)?.label ?? tab} statistics`}
+        empty={needle ? `Nothing matches “${q}”.` : minN > 1 ? `Nothing reaches ${minN} games yet. Lower the minimum games.` : 'Nothing to show for this selection.'}
       />
     );
   }
@@ -660,9 +724,7 @@ export function ExplorerApp({
           editing={editing}
           setEditing={setEditing}
           onAdd={upsert}
-          onUpdate={(key, f) =>
-            setFilters((list) => list.map((x) => (filterKey(x) === key ? f : x)))
-          }
+          onUpdate={(key, f) => setFilters((list) => list.map((x) => (filterKey(x) === key ? f : x)))}
           onRemove={removeFilter}
           onClear={() => {
             setFilters([]);
@@ -701,7 +763,7 @@ export function ExplorerApp({
       </section>
 
       {query.error && (
-        <div className="flex items-center gap-3 rounded-xl border border-bloom/30 bg-bloom/10 px-4 py-3 text-sm">
+        <div role="alert" className="flex items-center gap-3 rounded-xl border border-bloom/30 bg-bloom/10 px-4 py-3 text-sm">
           <TriangleAlert className="size-4 shrink-0 text-bloom" aria-hidden />
           <span className="text-moon">{query.error.message}</span>
           <button type="button" onClick={query.retry} className="ml-auto font-medium text-wisp hover:underline">
@@ -710,7 +772,7 @@ export function ExplorerApp({
         </div>
       )}
 
-      <div className={cn('transition-opacity', query.fetching && query.stale && 'opacity-70')}>
+      <div className={cn('transition-opacity', outdated && 'opacity-70')} aria-busy={query.fetching || undefined}>
         <SummaryStrip data={data} filtered={filtered} />
       </div>
 
@@ -727,16 +789,10 @@ export function ExplorerApp({
             </Select>
           ) : (
             tab !== 'levels' && (
-              <Select
-                label="Minimum games"
-                value={String(minGames)}
-                onChange={(e) => setMinGames(e.target.value === 'auto' ? 'auto' : Number(e.target.value))}
-              >
+              <Select label="Minimum games" value={String(minGames)} onChange={(e) => setMinGames(e.target.value === 'auto' ? 'auto' : Number(e.target.value))}>
                 <option value="auto">Min games: auto ({autoMinGames(data.summary.boards)})</option>
                 {MIN_GAMES.map((n) => (
-                  <option key={n} value={n}>
-                    Min games: {n}
-                  </option>
+                  <option key={n} value={n}>Min games: {n}</option>
                 ))}
               </Select>
             )
@@ -745,29 +801,14 @@ export function ExplorerApp({
       </div>
 
       {tab === 'units' && itemFilters.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-xl border hairline bg-canopy px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
-          <span className="eyebrow shrink-0 text-fog">Holding</span>
-          <Segmented
-            size="sm"
-            value={holdsKey ?? 'any'}
-            onChange={(v) => setHolds(v)}
-            options={[
-              ...itemFilters.map((f) => ({
-                value: f.id,
-                label: (
-                  <span className="inline-flex items-center gap-1.5">
-                    <ItemIcon id={f.id} size="xs" link={false} hover={false} />
-                    {index.item(f.id)?.name ?? f.id}
-                  </span>
-                ),
-              })),
-              { value: 'any', label: 'Whole board' },
-            ]}
-          />
-          <span className="text-xs leading-relaxed text-fog">
-            {holdsKey ? `Champions holding ${holdsName}.` : 'All champions on these boards.'}
-          </span>
-        </div>
+        <HolderBar
+          label="Holding"
+          value={holdsKey ?? 'any'}
+          onChange={setHolds}
+          options={itemFilters.map((f) => [f.id, <ItemIcon id={f.id} size="xs" link={false} hover={false} />, index.item(f.id)?.name ?? f.id])}
+          any="Whole board"
+          note={holdsKey ? `Champions holding ${holdsName}.` : 'All champions on these boards.'}
+        />
       )}
       {tab === 'units' && (
         <div className="flex flex-wrap gap-1.5">
@@ -789,56 +830,22 @@ export function ExplorerApp({
         </div>
       )}
       {tab === 'items' && unitFilters.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-xl border hairline bg-canopy px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
-          <span className="eyebrow shrink-0 text-fog">Held by</span>
-          <Segmented
-            size="sm"
-            value={holderKey ?? 'any'}
-            onChange={(v) => setHeld(v)}
-            options={[
-              ...unitFilters.map((f) => ({
-                value: f.id,
-                label: (
-                  <span className="inline-flex items-center gap-1.5">
-                    <ChampionIcon id={f.id} size="xs" link={false} hover={false} />
-                    {index.champion(f.id)?.name ?? f.id}
-                  </span>
-                ),
-              })),
-              { value: 'any', label: 'Any unit' },
-            ]}
-          />
-          <span className="text-xs leading-relaxed text-fog">
-            {holderKey ? `Items ${holderName} holds.` : 'All items on these boards.'}
-          </span>
-        </div>
+        <HolderBar
+          label="Held by"
+          value={holderKey ?? 'any'}
+          onChange={setHeld}
+          options={unitFilters.map((f) => [f.id, <ChampionIcon id={f.id} size="xs" link={false} hover={false} />, index.champion(f.id)?.name ?? f.id])}
+          any="Any unit"
+          note={holderKey ? `Items ${holderName} holds.` : 'All items on these boards.'}
+        />
       )}
-      {tab === 'items' && (
-        <div className="flex flex-wrap gap-1.5">
-          <Chip active={!itemGroup} onClick={() => setItemGroup(null)}>
-            All items
-          </Chip>
-          {ITEM_GROUPS.map((g) => (
-            <Chip key={g.id} active={itemGroup === g.id} onClick={() => setItemGroup(itemGroup === g.id ? null : g.id)}>
-              {g.label}
-            </Chip>
-          ))}
-        </div>
-      )}
-      {tab === 'traits' && (
-        <div className="flex flex-wrap gap-1.5">
-          <Chip active={!traitKind} onClick={() => setTraitKind(null)}>
-            All traits
-          </Chip>
-          {TRAIT_KINDS.map((k) => (
-            <Chip key={k.id} active={traitKind === k.id} onClick={() => setTraitKind(traitKind === k.id ? null : k.id)}>
-              {k.label}
-            </Chip>
-          ))}
-        </div>
-      )}
+      {tab === 'items' && <ChipRow all="All items" options={ITEM_GROUPS} value={itemGroup} onChange={setItemGroup} />}
+      {tab === 'traits' && <ChipRow all="All traits" options={TRAIT_KINDS} value={traitKind} onChange={setTraitKind} />}
 
-      {body}
+      {/* The rows fade with the summary: a row clicked far down the table changes the filters out of sight. */}
+      <div className={cn('transition-opacity', outdated && 'opacity-70')} aria-busy={query.fetching || undefined}>
+        {body}
+      </div>
 
       {/* Relative times can differ between the server's render and the browser's clock. */}
       <p suppressHydrationWarning className="text-xs leading-relaxed text-fog">

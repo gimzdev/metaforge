@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useMemo, useState, useTransition, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp } from '@/components/icons';
@@ -16,7 +17,7 @@ export interface Column<R> {
   title?: string;
   align?: 'left' | 'right';
   sort?: (row: R) => number | string;
-  /** Default direction when this column is first sorted */
+  /** Sort descending when this column is first picked. */
   desc?: boolean;
   render: (row: R) => ReactNode;
   className?: string;
@@ -26,18 +27,7 @@ export interface Column<R> {
 /** Columns hide by the table's own width (container queries), so tables fit narrow panels too. */
 const HIDE = { sm: 'hidden @md:table-cell', md: 'hidden @xl:table-cell', lg: 'hidden @3xl:table-cell' } as const;
 
-export function StatsTable<R extends { id: string }>({
-  rows,
-  columns,
-  defaultSort,
-  defaultDesc = false,
-  onRowClick,
-  rowClassName,
-  empty,
-  limit = 60,
-  caption,
-  bare = false,
-}: {
+export function StatsTable<R extends { id: string }>({ rows, columns, defaultSort, defaultDesc = false, onRowClick, rowClassName, empty, limit = 60, caption, bare = false }: {
   rows: R[];
   columns: Column<R>[];
   defaultSort?: string;
@@ -70,6 +60,10 @@ export function StatsTable<R extends { id: string }>({
   }
 
   const align = (c: Column<R>) => (c.align === 'right' ? 'text-right' : 'text-left');
+  // A link or button in the row does its own thing (the row would act a second time).
+  const click = (row: R) => (e: { target: EventTarget }) => {
+    if (!(e.target as Element).closest('a, button')) onRowClick?.(row);
+  };
   return (
     <div className={cn('@container', !bare && 'overflow-hidden rounded-xl border hairline')}>
       <div className="overflow-x-auto scroll-thin">
@@ -91,11 +85,8 @@ export function StatsTable<R extends { id: string }>({
                       <button
                         type="button"
                         onClick={() => {
-                          if (active) setDesc((d) => !d);
-                          else {
-                            setSortKey(c.key);
-                            setDesc(Boolean(c.desc));
-                          }
+                          setSortKey(c.key);
+                          setDesc(active ? !desc : Boolean(c.desc));
                         }}
                         className={cn('inline-flex items-center gap-1 hover:text-moon', active && 'text-moon')}
                       >
@@ -114,7 +105,7 @@ export function StatsTable<R extends { id: string }>({
             {(showAll ? sorted : sorted.slice(0, limit)).map((row) => (
               <tr
                 key={row.id}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                onClick={onRowClick && click(row)}
                 className={cn('border-t hairline transition-colors', onRowClick && 'cursor-pointer hover:bg-white/[0.035]', rowClassName?.(row))}
               >
                 {columns.map((c) => (
@@ -130,6 +121,7 @@ export function StatsTable<R extends { id: string }>({
       {sorted.length > limit && (
         <button
           type="button"
+          aria-expanded={showAll}
           onClick={() => setShowAll((s) => !s)}
           className="w-full border-t hairline py-3 text-sm font-medium text-lichen hover:bg-white/[0.03] hover:text-moon"
         >
@@ -187,16 +179,7 @@ export const gamesColumn: Column<StatRow> = {
 
 type TableKind = 'unit' | 'item' | 'trait' | 'aug' | 'level' | 'star' | 'count' | 'tier';
 
-const NAME_LABEL: Record<TableKind, string> = {
-  unit: 'Champion',
-  item: 'Item',
-  trait: 'Trait',
-  aug: 'Augment',
-  level: 'Level',
-  star: 'Stars',
-  count: 'Items held',
-  tier: 'Breakpoint',
-};
+const NAME_LABEL: Record<TableKind, string> = { unit: 'Champion', item: 'Item', trait: 'Trait', aug: 'Augment', level: 'Level', star: 'Stars', count: 'Items held', tier: 'Breakpoint' };
 
 function Label({ kind, row, traitKey }: { kind: TableKind; row: StatRow; traitKey?: string }) {
   if (kind === 'unit' || kind === 'item' || kind === 'aug' || kind === 'level') return <EntityCell kind={kind} id={row.id} />;
@@ -215,7 +198,6 @@ function Label({ kind, row, traitKey }: { kind: TableKind; row: StatRow; traitKe
       </span>
     );
   }
-  // A trait breakpoint.
   const trait = traitKey ? currentIndex().trait(traitKey) : undefined;
   const tier = Number(row.id);
   const effect = trait?.effects[tier - 1];
@@ -249,17 +231,7 @@ export function rowName(kind: string, r: StatRow): string {
 }
 
 /** Sortable stats table for entity pages. */
-export function EntityTable({
-  kind,
-  rows,
-  traitKey,
-  minN = 1,
-  limit = 12,
-  defaultSort = 'avg',
-  freqLabel = 'Play rate',
-  showDelta = true,
-  link = true,
-}: {
+export function EntityTable({ kind, rows, traitKey, minN = 1, limit = 12, defaultSort = 'avg', freqLabel = 'Play rate', showDelta = true, link = true }: {
   kind: TableKind;
   rows: StatRow[];
   traitKey?: string;
@@ -272,18 +244,33 @@ export function EntityTable({
 }) {
   const router = useRouter();
   const list = rows.filter((r) => r.n >= minN);
+  const clickable = link && (kind === 'unit' || kind === 'item' || kind === 'trait');
+  const open = (r: StatRow) => {
+    const href = rowHref(kind, r.id);
+    if (href) router.push(href);
+  };
   const columns: Column<StatRow>[] = [
     {
       key: 'name',
       label: NAME_LABEL[kind],
       sort: (r) => (kind === 'unit' || kind === 'item' || kind === 'aug' ? rowName(kind, r) : r.id.padStart(4, '0')),
-      render: (r) => <Label kind={kind} row={r} traitKey={traitKey} />,
+      render: (r) => {
+        const label = <Label kind={kind} row={r} traitKey={traitKey} />;
+        const href = clickable ? rowHref(kind, r.id) : undefined;
+        // The name is a real link (keyboard, new tab, screen readers); the rest of the row stays clickable.
+        return href ? (
+          <Link href={href} prefetch={false} className="block w-fit rounded-md">
+            {label}
+          </Link>
+        ) : (
+          label
+        );
+      },
       className: 'min-w-[132px] @lg:min-w-[180px]',
     },
     ...statColumns(list, { freqLabel, showDelta, deltaTitle: 'Change in average placement (negative is better)' }),
     gamesColumn,
   ];
-  const clickable = link && (kind === 'unit' || kind === 'item' || kind === 'trait');
   return (
     <StatsTable
       rows={list}
@@ -291,14 +278,7 @@ export function EntityTable({
       defaultSort={defaultSort}
       defaultDesc={defaultSort === 'freq' || defaultSort === 'n'}
       limit={limit}
-      onRowClick={
-        clickable
-          ? (r) => {
-              const href = rowHref(kind, r.id);
-              if (href) router.push(href);
-            }
-          : undefined
-      }
+      onRowClick={clickable ? open : undefined}
       empty="Not enough games yet."
       bare
     />

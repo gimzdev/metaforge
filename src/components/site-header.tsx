@@ -7,6 +7,7 @@ import { CornerDownLeft, LogIn, LogOut, Search, User, X } from '@/components/ico
 import { Art } from '@/components/art';
 import { GameImage } from '@/components/game/game-image';
 import { Wordmark } from '@/components/logo';
+import { usePlayerSuggestions } from '@/components/player/player-search';
 import { useApp } from '@/components/providers';
 import { useEdgeFade } from '@/components/ui-client';
 import { setPlatform, usePrefs } from '@/lib/prefs';
@@ -17,8 +18,6 @@ import type { StatusPayload } from '@/lib/status';
 import { MenuOrder, type MenuGroup, type MenuRow } from '@/lib/command-menu';
 import { cn, fmt, parseRiotId, riotIdToSlug } from '@/lib/utils';
 
-/* ── Search ─────────────────────────────────────────────── */
-
 interface Row extends MenuRow {
   href: string;
   body: ReactNode;
@@ -27,11 +26,34 @@ interface RowGroup extends MenuGroup<Row> {
   heading: string;
 }
 
-/**
- * The big search bar in the header: champions, traits, items, pages and players by
- * Riot ID, with results right under the field. Press / or Ctrl+K. Ranking and keys
- * follow the command menu it was first built with (see lib/command-menu.ts).
- */
+const PAGES: RowGroup = {
+  id: 'pages',
+  heading: 'Pages',
+  rows: NAV.map((n) => ({
+    id: `p:${n.href}`,
+    value: `page ${n.label}`,
+    href: n.href,
+    body: (
+      <>
+        <n.icon className="size-4 shrink-0 text-lichen" aria-hidden />
+        {n.label}
+      </>
+    ),
+  })),
+};
+
+const playerName = (gameName: string, tagLine: string, lead = '') => (
+  <>
+    <User className="size-4 shrink-0 text-lichen" aria-hidden />
+    <span className="truncate">
+      {lead}
+      {gameName}
+      <span className="text-fog">#{tagLine}</span>
+    </span>
+  </>
+);
+
+/** Header search: champions, traits, items, pages and players (known by name, else by Riot ID); / or Ctrl+K. */
 function HeaderSearch({ className, shortcut = true }: { className?: string; shortcut?: boolean }) {
   const router = useRouter();
   const { platform, recent } = usePrefs();
@@ -40,15 +62,81 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
   const [, redraw] = useReducer((n: number) => n + 1, 0);
   const wrap = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const list = useRef<HTMLDivElement>(null);
+  /** Where focus was before / or Ctrl+K: Escape hands it back. */
+  const back = useRef<HTMLElement | null>(null);
   const order = useRef<MenuOrder>(null);
   order.current ??= new MenuOrder();
-  const needle = query.trim();
+  // Matched without the spaces around it, so a pasted "Name#TAG " still finds the player.
+  const needle = query.trim().replace(/\s+/g, ' ');
   const riotId = parseRiotId(query);
   const listId = `search-${shortcut ? 'wide' : 'narrow'}`;
+  // Only while the list is open and no #TAG is typed, so typing elsewhere never sends requests.
+  const known = usePlayerSuggestions(open && !riotId ? needle : '', platform);
+  const index = currentIndex();
+
+  // Built once per game data, so typing only re-scores the rows and their pictures don't render again.
+  const catalog = useMemo<RowGroup[]>(
+    () => [
+      {
+        id: 'champions',
+        heading: 'Champions',
+        rows: index.data.champions.map((c) => ({
+          id: `c:${c.key}`,
+          value: `champion ${c.name}`,
+          href: `/units/${c.slug}`,
+          body: (
+            <>
+              <span aria-hidden className="shrink-0 rounded-md p-px" style={{ background: costColor(c.cost) }}>
+                <GameImage src={c.icon} alt={c.name} px={28} className="size-7 rounded-[5px]" />
+              </span>
+              <span className="truncate">{c.name}</span>
+              <span className="ml-auto shrink-0 text-xs text-fog">{c.cost}-cost</span>
+            </>
+          ),
+        })),
+      },
+      {
+        id: 'traits',
+        heading: 'Traits',
+        rows: index.data.traits.map((t) => ({
+          id: `t:${t.key}`,
+          value: `trait ${t.name}`,
+          href: `/traits/${t.slug}`,
+          body: (
+            <>
+              <span aria-hidden className="shrink-0">
+                <GameImage src={t.icon} alt={t.name} contain className="size-7 bg-transparent" />
+              </span>
+              <span className="truncate">{t.name}</span>
+              <span className="ml-auto shrink-0 text-xs capitalize text-fog">{traitKindLabel(t)}</span>
+            </>
+          ),
+        })),
+      },
+      {
+        id: 'items',
+        heading: 'Items',
+        rows: index.data.items
+          .filter((i) => i.category !== 'special' && i.category !== 'consumable')
+          .map((i) => ({
+            id: `i:${i.key}`,
+            value: `item ${i.name}`,
+            href: `/items/${i.slug}`,
+            body: (
+              <>
+                <span aria-hidden className="shrink-0">
+                  <GameImage src={i.icon} alt={i.name} className="size-7 rounded" />
+                </span>
+                <span className="truncate">{i.name}</span>
+              </>
+            ),
+          })),
+      },
+    ],
+    [index],
+  );
 
   const spec = useMemo(() => {
-    const index = currentIndex();
     const groups: RowGroup[] = [];
     if (riotId) {
       groups.push({
@@ -57,22 +145,18 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
         rows: [
           {
             id: 'player',
-            value: `player ${query}`.trim(),
+            value: `player ${needle}`,
             href: `/player/${platform}/${riotIdToSlug(riotId.gameName, riotId.tagLine)}`,
             body: (
               <>
-                <User className="size-4 text-lichen" aria-hidden />
-                <span className="truncate">
-                  Look up {riotId.gameName}
-                  <span className="text-fog">#{riotId.tagLine}</span>
-                </span>
+                {playerName(riotId.gameName, riotId.tagLine, 'Look up ')}
                 <select
                   aria-label="Region"
                   value={platform}
                   onClick={(e) => e.stopPropagation()}
                   onPointerDown={(e) => e.stopPropagation()}
                   onChange={(e) => setPlatform(e.target.value)}
-                  className="ml-auto h-7 rounded-md border border-line-strong bg-night px-1.5 text-xs text-lichen outline-none"
+                  className="ml-auto h-7 shrink-0 rounded-md border border-line-strong bg-night px-1.5 text-xs text-lichen"
                 >
                   {PLATFORMS.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -80,11 +164,31 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
                     </option>
                   ))}
                 </select>
-                <CornerDownLeft className="size-3.5 text-fog" aria-hidden />
+                <CornerDownLeft className="size-3.5 shrink-0 text-fog" aria-hidden />
               </>
             ),
           },
         ],
+      });
+    }
+    if (known.players.length) {
+      groups.push({
+        id: 'known',
+        heading: 'Players',
+        rows: known.players.map((k) => ({
+          id: `k:${k.platform}:${k.gameName}#${k.tagLine}`,
+          value: `${needle} player ${k.gameName} ${k.tagLine} ${k.platform}`,
+          href: `/player/${k.platform}/${riotIdToSlug(k.gameName, k.tagLine)}`,
+          body: (
+            <>
+              {playerName(k.gameName, k.tagLine)}
+              <span className="ml-auto shrink-0 text-xs text-fog">
+                {platformLabel(k.platform)}
+                {k.tier ? ` · ${k.tier.charAt(0)}${k.tier.slice(1).toLowerCase()}` : ''}
+              </span>
+            </>
+          ),
+        })),
       });
     }
     if (!needle && recent.length) {
@@ -97,89 +201,19 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
           href: `/player/${r.platform}/${riotIdToSlug(r.gameName, r.tagLine)}`,
           body: (
             <>
-              <User className="size-4 text-lichen" aria-hidden />
-              <span className="truncate">
-                {r.gameName}
-                <span className="text-fog">#{r.tagLine}</span>
-              </span>
-              <span className="ml-auto text-xs text-fog">{platformLabel(r.platform)}</span>
+              {playerName(r.gameName, r.tagLine)}
+              <span className="ml-auto shrink-0 text-xs text-fog">{platformLabel(r.platform)}</span>
             </>
           ),
         })),
       });
     }
-    if (needle) {
-      groups.push({
-        id: 'champions',
-        heading: 'Champions',
-        rows: index.data.champions.map((c) => ({
-          id: `c:${c.key}`,
-          value: `champion ${c.name}`,
-          href: `/units/${c.slug}`,
-          body: (
-            <>
-              <span className="rounded-md p-px" style={{ background: costColor(c.cost) }}>
-                <GameImage src={c.icon} alt={c.name} px={28} className="size-7 rounded-[5px]" />
-              </span>
-              <span className="truncate">{c.name}</span>
-              <span className="ml-auto text-xs text-fog">{c.cost}-cost</span>
-            </>
-          ),
-        })),
-      });
-      groups.push({
-        id: 'traits',
-        heading: 'Traits',
-        rows: index.data.traits.map((t) => ({
-          id: `t:${t.key}`,
-          value: `trait ${t.name}`,
-          href: `/traits/${t.slug}`,
-          body: (
-            <>
-              <GameImage src={t.icon} alt={t.name} contain className="size-7 bg-transparent" />
-              <span className="truncate">{t.name}</span>
-              <span className="ml-auto text-xs capitalize text-fog">{traitKindLabel(t)}</span>
-            </>
-          ),
-        })),
-      });
-      groups.push({
-        id: 'items',
-        heading: 'Items',
-        rows: index.data.items
-          .filter((i) => i.category !== 'special' && i.category !== 'consumable')
-          .map((i) => ({
-            id: `i:${i.key}`,
-            value: `item ${i.name}`,
-            href: `/items/${i.slug}`,
-            body: (
-              <>
-                <GameImage src={i.icon} alt={i.name} className="size-7 rounded" />
-                <span className="truncate">{i.name}</span>
-              </>
-            ),
-          })),
-      });
-    }
-    groups.push({
-      id: 'pages',
-      heading: 'Pages',
-      rows: NAV.map((n) => ({
-        id: `p:${n.href}`,
-        value: `page ${n.label}`,
-        href: n.href,
-        body: (
-          <>
-            <n.icon className="size-4 text-lichen" aria-hidden />
-            {n.label}
-          </>
-        ),
-      })),
-    });
+    if (needle) groups.push(...catalog);
+    groups.push(PAGES);
     return groups;
-  }, [query, needle, riotId?.gameName, riotId?.tagLine, platform, recent]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [needle, riotId?.gameName, riotId?.tagLine, platform, recent, known.players, catalog]);
 
-  const groups = useMemo(() => order.current!.update(open, spec, query), [open, spec, query]);
+  const groups = useMemo(() => order.current!.update(open, spec, needle), [open, spec, needle]);
   const flat = groups.flatMap((g) => g.rows);
   const selected = order.current.value;
   const at = flat.findIndex((r) => r.value === selected);
@@ -188,7 +222,7 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
     redraw();
   };
 
-  // Bring the entry picked with the keys into view (see MenuOrder.scrollTo for searches).
+  // Bring the entry picked with the keys into view (MenuOrder.scrollTo covers searches).
   const keyed = useRef<string | null>(null);
   useLayoutEffect(() => {
     const target = keyed.current ?? order.current!.scrollTo;
@@ -218,6 +252,8 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
         // Only the visible search bar takes the shortcut.
         if (!input.current || input.current.offsetParent === null) return;
         e.preventDefault();
+        const from = document.activeElement;
+        if (from instanceof HTMLElement && from !== document.body && !wrap.current?.contains(from)) back.current = from;
         input.current.focus();
         setOpen(true);
       }
@@ -226,18 +262,24 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
     return () => window.removeEventListener('keydown', onKey);
   }, [shortcut]);
 
-
   const go = (href: string) => {
     setOpen(false);
     setQuery('');
+    back.current = null;
     input.current?.blur();
     router.push(href);
   };
 
-  // Keys as in the command menu: arrows (Alt jumps groups, Meta to the ends, wrapping
-  // around), Ctrl+N/J and Ctrl+P/K, Home, End and Enter.
+  // Arrows (Alt jumps groups, Meta to the ends, wrapping), Ctrl+N/J/P/K, Home, End, Enter; only in the field, so
+  // the region picker and clear button keep their own keys.
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.defaultPrevented || e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.target !== input.current || e.defaultPrevented || e.nativeEvent.isComposing || e.keyCode === 229) return;
+    // With the list closed (after Escape), the arrows and Enter open it again.
+    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter')) {
+      e.preventDefault();
+      setOpen(true);
+      return;
+    }
     const to = (i: number) => {
       if (!flat[i]) return;
       keyed.current = flat[i].value;
@@ -256,43 +298,37 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
       // Wraps around; with nothing picked, down starts at the top and up at the bottom.
       to(at < 0 ? (dir > 0 ? 0 : flat.length - 1) : (at + dir + flat.length) % flat.length);
     };
-    switch (e.key) {
-      case 'n':
-      case 'j':
-        if (e.ctrlKey) step(1);
-        break;
-      case 'ArrowDown':
-        step(1);
-        break;
-      case 'p':
-      case 'k':
-        if (e.ctrlKey) step(-1);
-        break;
-      case 'ArrowUp':
-        step(-1);
-        break;
-      case 'Home':
-        e.preventDefault();
-        to(0);
-        break;
-      case 'End':
-        e.preventDefault();
-        to(flat.length - 1);
-        break;
-      case 'Enter':
-        e.preventDefault();
-        if (at >= 0) go(flat[at].href);
-        break;
+    if (e.key === 'ArrowDown' || (e.ctrlKey && (e.key === 'n' || e.key === 'j'))) step(1);
+    else if (e.key === 'ArrowUp' || (e.ctrlKey && (e.key === 'p' || e.key === 'k'))) step(-1);
+    else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      to(e.key === 'Home' ? 0 : flat.length - 1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (at >= 0) go(flat[at].href);
     }
   };
 
   return (
-    <div ref={wrap} className={cn('relative', className)}>
+    <div
+      ref={wrap}
+      className={cn('relative', className)}
+      onBlur={(e) => {
+        // Tabbing out closes the list.
+        if (e.relatedTarget instanceof Node && !e.currentTarget.contains(e.relatedTarget)) {
+          setOpen(false);
+          back.current = null;
+        }
+      }}
+    >
       <div className="relative" tabIndex={-1} onKeyDown={onKeyDown}>
-        <label htmlFor={`${listId}-input`} className="sr-only">
-          Search MetaForge
-        </label>
-        <div className={cn('flex h-11 items-center gap-3 rounded-lg border bg-canopy pl-3.5 pr-2 transition-colors', open ? 'border-lichen/45' : 'border-line-strong hover:border-lichen/30')}>
+        <label htmlFor={`${listId}-input`} className="sr-only">Search MetaForge</label>
+        <div
+          className={cn(
+            'flex h-11 items-center gap-3 rounded-lg border bg-canopy pl-3.5 pr-2 transition-colors',
+            open ? 'border-lichen/45' : 'border-line-strong hover:border-lichen/30 focus-within:border-lichen/45',
+          )}
+        >
           <Search className="size-[18px] shrink-0 text-fog" aria-hidden />
           <input
             ref={input}
@@ -303,14 +339,16 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
             }}
             onFocus={() => setOpen(true)}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setOpen(false);
-                input.current?.blur();
-              }
+              if (e.key !== 'Escape' || e.nativeEvent.isComposing) return;
+              // Focus goes back to where / or Ctrl+K took it from, otherwise it stays here.
+              setOpen(false);
+              const to = back.current;
+              back.current = null;
+              if (to?.isConnected) to.focus();
             }}
             role="combobox"
-            aria-expanded
-            aria-controls={listId}
+            aria-expanded={open}
+            aria-controls={open ? listId : undefined}
             aria-autocomplete="list"
             aria-activedescendant={open && at >= 0 ? `${listId}-${at}` : undefined}
             id={`${listId}-input`}
@@ -318,7 +356,7 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
             autoComplete="off"
             autoCorrect="off"
             spellCheck={false}
-            placeholder="Search champions, items, traits or Name#TAG"
+            placeholder="Search champions, items or players"
             className="h-full min-w-0 flex-1 bg-transparent text-[14.5px] text-moon outline-none placeholder:text-fog"
           />
           {query ? (
@@ -340,14 +378,17 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
 
         {open && (
           <div
-            ref={list}
             id={listId}
             role="listbox"
             aria-label="Suggestions"
             tabIndex={-1}
             className="absolute inset-x-0 top-[calc(100%+6px)] z-50 max-h-[min(70vh,560px)] overflow-y-auto rounded-lg border border-line-strong bg-canopy p-1.5 shadow-[0_24px_60px_-20px_rgb(0_0_0/0.9)] scroll-thin"
           >
-            {!flat.length && <div className="px-3 py-8 text-center text-sm text-lichen">Nothing found. Players are found by their full Riot ID, like Name#TAG.</div>}
+            {!flat.length && (
+              <div className="px-3 py-8 text-center text-sm text-lichen">
+                {known.pending ? 'Looking for players…' : 'Nothing found. For a player MetaForge has not seen yet, type the full Riot ID, like Name#TAG.'}
+              </div>
+            )}
             {groups.map((g) => (
               <div key={g.id} role="presentation" className="text-xs text-fog">
                 <div aria-hidden className="px-3 pb-1.5 pt-3 text-[10.5px] font-semibold uppercase tracking-[0.14em]">
@@ -384,39 +425,37 @@ function HeaderSearch({ className, shortcut = true }: { className?: string; shor
   );
 }
 
-/* ── Header ─────────────────────────────────────────────── */
-
-/** Small data-health line: green when matches are flowing, amber when something needs attention. */
+/** Data-health line: green when matches are flowing, amber when something needs attention. */
 function DataStatus() {
   const [data, setData] = useState<StatusPayload | null>(null);
   useEffect(() => {
     let alive = true;
-    const load = () =>
+    // Shown only on lg screens, so phones never poll.
+    const wide = window.matchMedia('(min-width: 64rem)');
+    const load = () => {
+      if (!wide.matches) return;
       fetch('/api/status', { cache: 'no-store' })
-        .then((r) => r.json())
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((d: StatusPayload) => alive && setData(d))
         .catch(() => undefined);
+    };
     load();
-    // Every minute while the tab is in view.
     const timer = window.setInterval(() => document.visibilityState === 'visible' && load(), 60_000);
+    wide.addEventListener('change', load);
     return () => {
       alive = false;
       window.clearInterval(timer);
+      wide.removeEventListener('change', load);
     };
   }, []);
   if (!data) return <span className="hidden h-4 w-24 rounded bg-bark/60 lg:block" />;
-  let tone = 'bg-good';
-  let label = data.lastMatchAt ? `Updated ${fmt.ago(data.lastMatchAt)}` : `${fmt.compact(data.boards)} boards`;
-  if (!data.riotKey) {
-    tone = 'bg-firefly';
-    label = 'No API key';
-  } else if (data.keyRejectedAt && Date.now() - data.keyRejectedAt < 30 * 60_000) {
-    tone = 'bg-bloom';
-    label = 'Key rejected';
-  } else if (!data.boards) {
-    tone = 'bg-firefly';
-    label = data.collecting ? 'Collecting' : 'No matches yet';
-  }
+  const [tone, label] = !data.riotKey
+    ? ['bg-firefly', 'No API key']
+    : data.keyRejectedAt && Date.now() - data.keyRejectedAt < 30 * 60_000
+      ? ['bg-bloom', 'Key rejected']
+      : !data.boards
+        ? ['bg-firefly', data.collecting ? 'Collecting' : 'No matches yet']
+        : ['bg-good', data.lastMatchAt ? `Updated ${fmt.ago(data.lastMatchAt)}` : `${fmt.compact(data.boards)} boards`];
   return (
     <span title={`${fmt.int(data.boards)} boards stored`} className="hidden items-center gap-2 text-[13px] text-lichen lg:inline-flex">
       <span className={cn('size-1.5 rounded-full', tone, data.collecting && 'animate-pulse-soft')} />
@@ -439,8 +478,7 @@ function Account() {
         <form action="/api/auth/logout" method="post">
           <button type="submit" title="Sign out" className={cn(box, 'gap-1.5 px-3 text-lichen hover:border-bloom/50 hover:text-bloom')}>
             <LogOut className="size-3.5" aria-hidden />
-            <span className="hidden sm:inline">Sign out</span>
-            <span className="sr-only sm:hidden">Sign out</span>
+            <span className="sr-only sm:not-sr-only">Sign out</span>
           </button>
         </form>
       </div>
@@ -460,7 +498,7 @@ function Account() {
   return (
     <a href="/api/auth/login" className={cn(box, 'gap-1.5 px-3 text-lichen hover:text-moon')}>
       <LogIn className="size-3.5" aria-hidden />
-      <span className="hidden sm:inline">Sign in with Riot</span>
+      <span className="sr-only sm:not-sr-only">Sign in with Riot</span>
     </a>
   );
 }
@@ -468,7 +506,7 @@ function Account() {
 export function SiteHeader() {
   const pathname = usePathname();
   const scroller = useRef<HTMLDivElement>(null);
-  // On narrow screens the nav scrolls sideways: keep the current page in view, fade the edge with more.
+  // Narrow screens scroll the nav sideways: keep the current page in view, fade the edge when there is more.
   const edge = useEdgeFade(scroller, [pathname]);
   const active = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   return (
@@ -516,15 +554,9 @@ export function SiteHeader() {
   );
 }
 
-/** Pages that open on a framed picture of their own (banner or champion splash). */
 const FRAMED = /^\/(guides|leaderboard|units|items|traits|comps)(\/|$)/;
 
-/**
- * bg.jpg behind every page. Home gets it full strength behind the masthead; other
- * pages get a quieter horizon that melts into the page before the data starts, out of
- * focus on pages with a framed picture of their own. A light grain keeps flat ink from
- * looking plastic.
- */
+/** bg.jpg behind every page: full strength on home, elsewhere a quieter horizon (blurred on FRAMED pages), plus grain. */
 export function SiteBackdrop() {
   const path = usePathname();
   const art = brand.background;

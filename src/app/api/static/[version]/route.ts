@@ -7,11 +7,7 @@ export const dynamic = 'force-dynamic';
 
 const bodies = new WeakMap<StaticData, { text: string; gzip?: Buffer }>();
 
-/**
- * Ability, trait, item and augment descriptions for hover cards and the builder. The
- * version in the URL changes whenever the game data does, so a matching request can be
- * cached by the browser for good.
- */
+/** Game text for hover cards and the builder; the URL version tracks the data, so a match is cached for good. */
 export async function GET(req: Request, { params }: { params: Promise<{ version: string }> }) {
   const [{ version }, { data, error }] = await Promise.all([params, tryGetStaticData()]);
   if (!data) return NextResponse.json({ error: error ?? 'Game data unavailable' }, { status: 503 });

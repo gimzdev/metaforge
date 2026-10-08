@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { Pool, type QueryResultRow } from 'pg';
 import { env } from '@/lib/env';
-import { dedupePlayers, type BoardRecord, type MatchQuery, type MatchRecord, type PlayerRecord, type Store, type StoreStats, type StoredMatch } from './types';
+import { dedupePlayers, type LpPoint, type LpSeen, type BoardRecord, type MatchQuery, type MatchRecord, type PlayerRecord, type Store, type StoreStats, type StoredMatch } from './types';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS mf_matches (
@@ -39,6 +40,17 @@ CREATE TABLE IF NOT EXISTS mf_players (
   lp          integer,
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS mf_players_name_idx ON mf_players (lower(game_name) text_pattern_ops);
+
+CREATE TABLE IF NOT EXISTS mf_lp (
+  puuid       text NOT NULL,
+  at          timestamptz NOT NULL,
+  platform    text,
+  tier        text NOT NULL,
+  division    text,
+  lp          integer NOT NULL,
+  PRIMARY KEY (puuid, at)
+);
 
 CREATE TABLE IF NOT EXISTS mf_kv (
   k           text PRIMARY KEY,
@@ -53,14 +65,31 @@ CREATE TABLE IF NOT EXISTS mf_blob (
 );
 `;
 
-/**
- * pg treats sslmode=require/prefer/verify-ca as verify-full and warns about it on every
- * start. Spell out verify-full (same behavior, no warning) unless the URL opts into libpq semantics.
- */
-function normalizeSslMode(url: string): string {
-  if (/uselibpqcompat=/i.test(url)) return url;
-  return url.replace(/([?&]sslmode=)(prefer|require|verify-ca)\b/i, '$1verify-full');
+/** Skip SCHEMA when all of these exist: CREATE INDEX IF NOT EXISTS still takes a SHARE lock and blocks other servers' writes. */
+const SCHEMA_OBJECTS = [...SCHEMA.matchAll(/CREATE (?:TABLE|INDEX) IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
+
+/** Connection dropped by the server or network (Neon restarting/scaling a compute, a frozen instance's stale socket). */
+function droppedConnection(error: unknown) {
+  const e = error as { code?: unknown; message?: unknown } | null;
+  const code = typeof e?.code === 'string' ? e.code : '';
+  return (
+    ['57P01', '57P02', '57P03', '08000', '08003', '08006', 'ECONNRESET', 'EPIPE'].includes(code) ||
+    /Connection terminated unexpectedly|not queryable/i.test(typeof e?.message === 'string' ? e.message : '')
+  );
 }
+
+/** Bounds the ranking work for a very common name prefix ("ma") in a directory of millions. */
+const SEARCH_CANDIDATES = 2000;
+
+/** pg treats sslmode=require/prefer/verify-ca as verify-full but warns each start; spell it out unless libpq semantics are asked for. */
+function normalizeSslMode(url: string): string {
+  return /uselibpqcompat=/i.test(url) ? url : url.replace(/([?&]sslmode=)(prefer|require|verify-ca)\b/i, '$1verify-full');
+}
+
+type PlayerRow = { puuid: string; game_name: string | null; tag_line: string | null; platform: string | null; tier: string | null; lp: number | null; updated_at: string };
+const PLAYER_COLS = 'puuid, game_name, tag_line, platform, tier, lp, updated_at';
+const toPlayer = (r: PlayerRow): PlayerRecord =>
+  ({ puuid: r.puuid, gameName: r.game_name, tagLine: r.tag_line, platform: r.platform, tier: r.tier, lp: r.lp, updatedAt: new Date(r.updated_at).getTime() });
 
 export class PostgresStore implements Store {
   kind = 'postgres' as const;
@@ -69,7 +98,6 @@ export class PostgresStore implements Store {
   private channelBinding: boolean;
 
   constructor(private readonly connectionString: string) {
-    // Neon's connection strings ask for channel binding (SCRAM-SHA-256-PLUS), which pg supports over TLS.
     this.channelBinding = /[?&]channel_binding=require\b/i.test(connectionString);
     this.pool = this.createPool();
   }
@@ -87,33 +115,31 @@ export class PostgresStore implements Store {
   }
 
   describe() {
-    // Name the provider, never the host: this string is shown on public pages.
-    let host = '';
-    try {
-      host = new URL(env.databaseUrl).hostname;
-    } catch {
-      /* not a URL */
-    }
+    // Never the host: this string is shown on public pages.
+    const host = URL.canParse(env.databaseUrl) ? new URL(env.databaseUrl).hostname : '';
     if (host.endsWith('neon.tech')) return 'Postgres (Neon)';
     if (host.includes('supabase')) return 'Postgres (Supabase)';
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return 'Postgres (local)';
     return 'Postgres';
   }
 
+  private async ensureSchema() {
+    const res = await this.pool.query<{ n: number }>('SELECT count(to_regclass(name))::int AS n FROM unnest($1::text[]) AS name', [SCHEMA_OBJECTS]);
+    if ((res.rows[0]?.n ?? 0) < SCHEMA_OBJECTS.length) await this.pool.query(SCHEMA);
+  }
+
   init() {
-    this.ready ??= this.pool
-      .query(SCHEMA)
+    this.ready ??= this.ensureSchema()
       .catch(async (error: Error) => {
-        // If the server or a proxy in between cannot do channel binding, fall back to plain SCRAM (still over TLS).
+        // A server or proxy without channel binding: fall back to plain SCRAM (still over TLS).
         if (!this.channelBinding || !/SASL|SCRAM|channel binding/i.test(error.message)) throw error;
         console.warn(`[metaforge] postgres channel binding failed (${error.message}); retrying without it`);
         this.channelBinding = false;
         const old = this.pool;
         this.pool = this.createPool();
         void old.end().catch(() => undefined);
-        return this.pool.query(SCHEMA);
+        return this.ensureSchema();
       })
-      .then(() => undefined)
       .catch((error) => {
         this.ready = null;
         throw error;
@@ -121,9 +147,15 @@ export class PostgresStore implements Store {
     return this.ready;
   }
 
+  /** Statements sent here are idempotent, so a dropped connection gets one retry. */
   private async query<R extends QueryResultRow = QueryResultRow>(sql: string, params: unknown[] = []) {
     await this.init();
-    return this.pool.query<R>(sql, params);
+    try {
+      return await this.pool.query<R>(sql, params);
+    } catch (error) {
+      if (!droppedConnection(error)) throw error;
+      return this.pool.query<R>(sql, params);
+    }
   }
 
   async knownMatchIds(ids: string[]) {
@@ -134,7 +166,23 @@ export class PostgresStore implements Store {
 
   async saveMatch(match: MatchRecord, boards: BoardRecord[]) {
     await this.init();
+    try {
+      await this.saveMatchOnce(match, boards);
+    } catch (error) {
+      // Only ON CONFLICT DO NOTHING inserts, so it can run again.
+      if (!droppedConnection(error)) throw error;
+      await this.saveMatchOnce(match, boards);
+    }
+  }
+
+  private async saveMatchOnce(match: MatchRecord, boards: BoardRecord[]) {
     const client = await this.pool.connect();
+    let broken: Error | undefined;
+    // pg-pool ignores a checked-out client's errors; a drop mid-transaction would emit 'error' unheard and kill the process.
+    const onError = (error: Error) => {
+      broken = error;
+    };
+    client.on('error', onError);
     try {
       await client.query('BEGIN');
       await client.query(
@@ -158,19 +206,21 @@ export class PostgresStore implements Store {
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
+      // release(error) destroys a dead connection instead of pooling it.
+      if (droppedConnection(error)) broken ??= error as Error;
       throw error;
     } finally {
-      client.release();
+      client.removeListener('error', onError);
+      client.release(broken);
     }
   }
 
   async readMatches(q: MatchQuery, onMatch: (match: StoredMatch) => void) {
-    // The cursor is the database clock at the start of a read. Incremental reads look five minutes
-    // further back, so rows committed late by a slow transaction are not missed (duplicates are merged).
+    // Cursor = DB clock at read start; incremental reads look 5 min further back for late commits (duplicates merge).
     const clock = await this.query<{ now: string }>('SELECT (extract(epoch FROM now()) * 1000)::bigint::text AS now');
     let after = q.after && /^\d+$/.test(q.after) ? Number(q.after) - 5 * 60_000 : null;
     if (after !== null && q.known) {
-      // Fewer matches than the caller holds were stored by the last read: some were deleted, so start over.
+      // Fewer stored than the caller holds: some were deleted, so start over.
       const res = await this.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM mf_matches WHERE set_number = $1 AND queue_id = $2 AND boards_stored
             AND game_datetime >= $3 AND created_at <= to_timestamp($4::double precision / 1000)`,
@@ -192,7 +242,6 @@ export class PostgresStore implements Store {
         params.push(key.t, key.id);
         where += ` AND (game_datetime, match_id) < ($${params.length - 1}, $${params.length})`;
       }
-      // Walk matches newest first in pages (keyset pagination), so memory stays flat.
       const page = await this.query<{ match_id: string; platform: string; game_datetime: string }>(
         `SELECT match_id, platform, game_datetime FROM mf_matches WHERE ${where} ORDER BY game_datetime DESC, match_id DESC LIMIT $4`,
         params,
@@ -256,8 +305,18 @@ export class PostgresStore implements Store {
   }
 
   async upsertPlayers(players: PlayerRecord[]) {
-    const rows = dedupePlayers(players);
+    // Sorted by puuid so concurrent upserts (crawl listing, naming, match lobbies) lock rows in one order: no deadlocks.
+    const rows = dedupePlayers(players).sort((a, b) => (a.puuid < b.puuid ? -1 : a.puuid > b.puuid ? 1 : 0));
     if (!rows.length) return;
+    try {
+      await this.upsertPlayerRows(rows);
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code !== '40P01') throw error;
+      await this.upsertPlayerRows(rows);
+    }
+  }
+
+  private async upsertPlayerRows(rows: PlayerRecord[]) {
     await this.query(
       `INSERT INTO mf_players (puuid, game_name, tag_line, platform, tier, lp, updated_at)
        SELECT u.puuid, u.game_name, u.tag_line, u.platform, u.tier, u.lp, now()
@@ -282,16 +341,113 @@ export class PostgresStore implements Store {
   }
 
   async getPlayers(puuids: string[]) {
-    const out = new Map<string, PlayerRecord>();
-    if (!puuids.length) return out;
-    const res = await this.query<{ puuid: string; game_name: string | null; tag_line: string | null; platform: string | null; tier: string | null; lp: number | null; updated_at: string }>(
-      'SELECT puuid, game_name, tag_line, platform, tier, lp, updated_at FROM mf_players WHERE puuid = ANY($1::text[])',
-      [puuids],
+    if (!puuids.length) return new Map<string, PlayerRecord>();
+    const res = await this.query<PlayerRow>(`SELECT ${PLAYER_COLS} FROM mf_players WHERE puuid = ANY($1::text[])`, [puuids]);
+    return new Map(res.rows.map((r) => [r.puuid, toPlayer(r)]));
+  }
+
+  /**
+   * The trigram index for matches inside a name ("volta" in "SLY Voltariux"). Built by a collection run, once and
+   * without blocking writes; a build that was cut off (left invalid) is redone.
+   */
+  async ensureNameSearch() {
+    const res = await this.query<{ valid: boolean }>(
+      `SELECT i.indisvalid AS valid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE c.relname = 'mf_players_name_trgm'`,
     );
-    for (const r of res.rows) {
-      out.set(r.puuid, { puuid: r.puuid, gameName: r.game_name, tagLine: r.tag_line, platform: r.platform, tier: r.tier, lp: r.lp, updatedAt: new Date(r.updated_at).getTime() });
+    if (res.rows[0]?.valid) return;
+    if (res.rows.length) await this.pool.query('DROP INDEX CONCURRENTLY IF EXISTS mf_players_name_trgm');
+    await this.pool.query('CREATE EXTENSION IF NOT EXISTS pg_trgm');
+    await this.pool.query('CREATE INDEX CONCURRENTLY IF NOT EXISTS mf_players_name_trgm ON mf_players USING gin (lower(game_name) gin_trgm_ops)');
+  }
+
+  async recordLp(seen: LpSeen[], track: boolean) {
+    const rows = [...new Map(seen.map((p) => [p.puuid, p])).values()].sort((a, b) => (a.puuid < b.puuid ? -1 : a.puuid > b.puuid ? 1 : 0));
+    if (!rows.length) return;
+    await this.query(
+      `INSERT INTO mf_lp (puuid, at, platform, tier, division, lp)
+       SELECT u.puuid, date_trunc('hour', now()), u.platform, u.tier, u.division, u.lp
+         FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[]) AS u(puuid, platform, tier, division, lp)
+         LEFT JOIN LATERAL (SELECT h.tier, h.division, h.lp FROM mf_lp h WHERE h.puuid = u.puuid ORDER BY h.at DESC LIMIT 1) l ON true
+        WHERE ($6::boolean OR l.tier IS NOT NULL)
+          AND (l.tier IS NULL OR l.tier <> u.tier OR l.division IS DISTINCT FROM u.division OR l.lp <> u.lp)
+       ON CONFLICT (puuid, at) DO UPDATE SET platform = EXCLUDED.platform, tier = EXCLUDED.tier, division = EXCLUDED.division, lp = EXCLUDED.lp`,
+      [rows.map((p) => p.puuid), rows.map((p) => p.platform), rows.map((p) => p.tier), rows.map((p) => p.division), rows.map((p) => Math.round(p.lp)), track],
+    );
+  }
+
+  async lpHistory(puuid: string, since: number) {
+    const res = await this.query<{ at: string; tier: string; division: string | null; lp: number }>(
+      'SELECT at, tier, division, lp FROM mf_lp WHERE puuid = $1 AND at >= to_timestamp($2::double precision / 1000) ORDER BY at',
+      [puuid, since],
+    );
+    return res.rows.map((r): LpPoint => ({ at: new Date(r.at).getTime(), tier: r.tier, division: r.division, lp: r.lp }));
+  }
+
+  async pruneLp(before: number) {
+    const res = await this.query('DELETE FROM mf_lp WHERE at < to_timestamp($1::double precision / 1000)', [before]);
+    return res.rowCount ?? 0;
+  }
+
+  async unnamedPlayers(limit: number) {
+    // An empty (not NULL) name marks an account Riot does not know, so it is never asked for again.
+    const res = await this.query<{ puuid: string; platform: string | null; tier: string | null; lp: number | null }>(
+      `SELECT puuid, platform, tier, lp FROM mf_players
+        WHERE (game_name IS NULL OR tag_line IS NULL) AND platform IS NOT NULL
+        ORDER BY lp DESC NULLS LAST, updated_at DESC LIMIT $1`,
+      [Math.max(1, Math.min(limit, 20_000))],
+    );
+    return res.rows.map((r) => ({ puuid: r.puuid, platform: r.platform, tier: r.tier, lp: r.lp }));
+  }
+
+  async searchPlayers(prefix: string, opts: { platform?: string; prefer?: string; limit?: number } = {}) {
+    const q = prefix.trim();
+    if (!q) return [];
+    const limit = Math.max(1, Math.min(opts.limit ?? 8, 25));
+    const esc = q.replace(/[\\%_]/g, (c) => '\\' + c);
+    // $4: inside the name (3+ characters, like nameMatch), $5: at the start of a later word.
+    const params: unknown[] = [`${esc}%`, q, limit, q.length >= 3 ? `%${esc}%` : null, `% ${esc}%`];
+    let plat = '';
+    if (opts.platform) {
+      params.push(opts.platform);
+      plat = ` AND platform = $${params.length}`;
     }
-    return out;
+    params.push(opts.prefer ?? null);
+    const prefer = `$${params.length}::text`;
+    // Name starts walk mf_players_name_idx in byte order and stop early; matches inside the name use the trigram
+    // index (ensureNameSearch). Each side is bounded, then ranked like nameMatch: whole name, start, later word, inside.
+    const res = await this.query<PlayerRow>(
+      `SELECT ${PLAYER_COLS} FROM (
+         (SELECT ${PLAYER_COLS} FROM mf_players WHERE lower(game_name) LIKE lower($1) ESCAPE '\\' AND tag_line IS NOT NULL${plat}
+           ORDER BY lower(game_name) USING ~<~ LIMIT ${SEARCH_CANDIDATES})
+         UNION
+         (SELECT ${PLAYER_COLS} FROM mf_players WHERE $4::text IS NOT NULL AND lower(game_name) LIKE lower($4) ESCAPE '\\' AND tag_line IS NOT NULL${plat}
+           LIMIT ${SEARCH_CANDIDATES})
+       ) AS c
+        ORDER BY CASE WHEN lower(game_name) = lower($2) THEN 0 WHEN lower(game_name) LIKE lower($1) ESCAPE '\\' THEN 1
+                      WHEN ' ' || translate(lower(game_name), '._-', '   ') LIKE lower($5) ESCAPE '\\' THEN 2 ELSE 3 END,
+                 COALESCE(platform = ${prefer}, false) DESC, lp DESC NULLS LAST, updated_at DESC
+        LIMIT $3`,
+      params,
+    );
+    return res.rows.map(toPlayer);
+  }
+
+  async claim(key: string, ms: number) {
+    const token = randomUUID();
+    // One statement so two servers cannot both win; the DB clock decides expiry. The same token may re-claim (a retried drop).
+    const res = await this.query(
+      `INSERT INTO mf_kv (k, v, updated_at)
+       VALUES ($1, jsonb_build_object('token', $2::text, 'until', (extract(epoch FROM now()) * 1000)::bigint + $3::bigint), now())
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, updated_at = now()
+         WHERE COALESCE((mf_kv.v->>'until')::bigint, 0) < (extract(epoch FROM now()) * 1000)::bigint OR mf_kv.v->>'token' = $2
+       RETURNING k`,
+      [`lock:${key}`, token, Math.round(ms)],
+    );
+    return res.rowCount ? token : null;
+  }
+
+  async release(key: string, token: string) {
+    await this.query(`DELETE FROM mf_kv WHERE k = $1 AND v->>'token' = $2`, [`lock:${key}`, token]);
   }
 
   async getKv<T>(key: string) {

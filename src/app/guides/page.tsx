@@ -16,8 +16,8 @@ export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'Guides',
-  description:
-    'TFT fundamentals, the full item recipe chart for the current set, emblems, and how Enchanted Wilds mechanics work.',
+  description: 'TFT fundamentals, the full item recipe chart for the current set, emblems, and how Enchanted Wilds mechanics work.',
+  alternates: { canonical: '/guides' },
 };
 
 const FUNDAMENTALS = [
@@ -54,6 +54,18 @@ const FUNDAMENTALS = [
 ];
 
 const recipeKey = (a: string, b: string) => [a, b].sort().join('+');
+// The usual chart order: the eight stat components, then Frying Pan and Spatula last.
+const ORDER = ['bfsword', 'recurvebow', 'needlesslylargerod', 'tearofthegoddess', 'chainvest', 'negatroncloak', 'giantsbelt', 'sparringgloves', 'fryingpan', 'spatula'];
+const H2 = 'font-sans text-[17px] font-semibold tracking-normal text-moon';
+
+function Avg({ avg, className }: { avg?: number; className: string }) {
+  if (avg === undefined) return null;
+  return (
+    <span title="Average placement" className={cn('num font-semibold', className, toneText[placementTone(avg)])}>
+      {fmt.place(avg)}
+    </span>
+  );
+}
 
 export default async function GuidesPage() {
   const data = await getStaticData();
@@ -64,19 +76,6 @@ export default async function GuidesPage() {
     for (const r of meta.items) if (r.n >= minN) itemAvg.set(r.id, r.avg);
   }
 
-  // The usual chart order: the eight stat components, then Frying Pan and Spatula last.
-  const ORDER = [
-    'bfsword',
-    'recurvebow',
-    'needlesslylargerod',
-    'tearofthegoddess',
-    'chainvest',
-    'negatroncloak',
-    'giantsbelt',
-    'sparringgloves',
-    'fryingpan',
-    'spatula',
-  ];
   const rankOf = (key: string) => {
     const i = ORDER.findIndex((o) => key.replace(/[^a-z]/g, '').endsWith(o));
     return i < 0 ? ORDER.length - 2.5 : i;
@@ -87,14 +86,12 @@ export default async function GuidesPage() {
   const componentKeys = new Set(components.map((c) => c.key));
   const recipes = new Map<string, Item>();
   for (const item of data.items) {
-    if (item.composition.length !== 2) continue;
     const [a, b] = item.composition;
-    if (!componentKeys.has(a) || !componentKeys.has(b)) continue;
-    if (item.category === 'completed' || item.category === 'emblem') {
-      const key = recipeKey(a, b);
-      // Prefer the completed item if an emblem shares the recipe.
-      if (!recipes.has(key) || recipes.get(key)!.category !== 'completed') recipes.set(key, item);
-    }
+    if (item.composition.length !== 2 || !componentKeys.has(a) || !componentKeys.has(b)) continue;
+    if (item.category !== 'completed' && item.category !== 'emblem') continue;
+    const key = recipeKey(a, b);
+    // Prefer the completed item if an emblem shares the recipe.
+    if (recipes.get(key)?.category !== 'completed') recipes.set(key, item);
   }
   // Hide components that combine into nothing this set (e.g. a Frying Pan without recipes).
   const used = new Set<string>();
@@ -112,18 +109,14 @@ export default async function GuidesPage() {
     <div className="space-y-12">
       <PageHeader title="Guides" art={brand.learn} />
 
-      <Expandable
-        id="fundamentals"
-        title="Fundamentals"
-        hint={`Economy, leveling, positioning, how ${data.set.name} works and how to read the stats.`}
-      >
+      <Expandable id="fundamentals" title="Fundamentals" hint={`Economy, leveling, positioning, how ${data.set.name} works and how to read the stats.`}>
         <section className="space-y-4">
-          <h3 className="text-[17px] font-semibold text-moon">Fundamentals</h3>
+          <h2 className={H2}>Fundamentals</h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {FUNDAMENTALS.map((f) => (
               <div key={f.title} className="surface rounded-xl p-5">
                 <f.icon className="size-5 text-wisp" aria-hidden />
-                <h4 className="mt-3 text-[15px] font-semibold">{f.title}</h4>
+                <h3 className="mt-3 text-[15px] font-semibold">{f.title}</h3>
                 <p className="mt-1.5 text-sm leading-relaxed text-lichen">{f.body}</p>
               </div>
             ))}
@@ -132,29 +125,27 @@ export default async function GuidesPage() {
 
         <section id="set-mechanics" className="scroll-mt-24 space-y-4">
           <div>
-            <h3 className="text-[17px] font-semibold text-moon">{data.set.name} mechanics</h3>
+            <h2 className={H2}>{data.set.name} mechanics</h2>
             <p className="mt-1 text-sm text-lichen">{SET_OVERVIEW.intro}</p>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             {SET_OVERVIEW.mechanics.map((m) => (
               <div key={m.name} className="surface rounded-xl p-5">
-                <h4 className="text-[15px] font-semibold">{m.name}</h4>
+                <h3 className="text-[15px] font-semibold">{m.name}</h3>
                 <p className="mt-1.5 text-sm leading-relaxed text-lichen">{m.body}</p>
               </div>
             ))}
           </div>
           <p className="text-sm text-lichen">
             The{' '}
-            <Link href="/builder" className="font-medium text-wisp hover:underline">
-              team builder
-            </Link>{' '}
+            <Link href="/builder" className="font-medium text-wisp hover:underline">team builder</Link>{' '}
             follows these rules: the Avatar&apos;s doubled trait, one Avatar per board, and the Elder Dragon&apos;s two
             slots and Riftbeast bonus.
           </p>
         </section>
 
         <section className="space-y-3">
-          <h3 className="text-[17px] font-semibold text-moon">Reading MetaForge stats</h3>
+          <h2 className={H2}>Reading MetaForge stats</h2>
           <div className="grid gap-5 text-sm leading-relaxed text-lichen md:grid-cols-2">
             <p>
               <span className="font-semibold text-moon">Average place</span> is the mean final placement, from 1 to 8. A random
@@ -170,10 +161,7 @@ export default async function GuidesPage() {
               <span className="font-semibold text-moon">Grades</span> use a shrunk average that pulls small samples toward 4.50,
               so a comp with 15 games can&apos;t outrank one with 1,500 on luck alone.
             </p>
-            <p>
-              All numbers come from the final boards of ranked games, grouped by patch using
-              Riot&apos;s release dates.
-            </p>
+            <p>All numbers come from the final boards of ranked games, grouped by patch using Riot&apos;s release dates.</p>
           </div>
         </section>
       </Expandable>
@@ -189,9 +177,7 @@ export default async function GuidesPage() {
                     <th className="sticky left-0 z-10 size-[72px] bg-canopy" aria-label="Component" />
                     {chartComponents.map((c) => (
                       <th key={c.key} className="size-[72px] border-l hairline bg-canopy text-center align-middle">
-                        <span className="inline-flex">
-                          <ItemIcon id={c.key} px={40} />
-                        </span>
+                        <span className="inline-flex"><ItemIcon id={c.key} px={40} /></span>
                       </th>
                     ))}
                   </tr>
@@ -200,34 +186,18 @@ export default async function GuidesPage() {
                   {chartComponents.map((row) => (
                     <tr key={row.key} className="border-t hairline">
                       <th className="sticky left-0 z-10 size-[72px] bg-canopy text-center align-middle">
-                        <span className="inline-flex">
-                          <ItemIcon id={row.key} px={40} />
-                        </span>
+                        <span className="inline-flex"><ItemIcon id={row.key} px={40} /></span>
                       </th>
                       {chartComponents.map((col) => {
                         const item = recipes.get(recipeKey(row.key, col.key));
-                        const avg = item ? itemAvg.get(item.key) : undefined;
                         return (
-                          <td
-                            key={col.key}
-                            className={cn(
-                              'size-[72px] border-l hairline text-center align-middle',
-                              row.key === col.key && 'bg-white/[0.025]',
-                            )}
-                          >
-                            {item ? (
+                          <td key={col.key} className={cn('size-[72px] border-l hairline text-center align-middle', row.key === col.key && 'bg-white/[0.025]')}>
+                            {item && (
                               <span className="inline-flex flex-col items-center gap-1">
                                 <ItemIcon id={item.key} px={40} />
-                                {avg !== undefined && (
-                                  <span
-                                    title="Average placement"
-                                    className={cn('num text-[10px] font-semibold', toneText[placementTone(avg)])}
-                                  >
-                                    {fmt.place(avg)}
-                                  </span>
-                                )}
+                                <Avg avg={itemAvg.get(item.key)} className="text-[10px]" />
                               </span>
-                            ) : null}
+                            )}
                           </td>
                         );
                       })}
@@ -255,28 +225,18 @@ export default async function GuidesPage() {
                       <h3 className="sr-only">{g.title} emblems</h3>
                     </div>
                     <ul>
-                      {g.list.map((e) => {
-                        const avg = itemAvg.get(e.key);
-                        return (
-                          <li key={e.key} className="border-t hairline first:border-t-0">
-                            <Link
-                              href={`/items/${e.slug}`}
-                              className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-white/[0.03]"
-                            >
-                              <ItemIcon id={e.key} px={32} link={false} />
-                              <span className="min-w-0 flex-1 truncate text-sm font-medium">{e.name.replace(/\s*emblem$/i, '')}</span>
-                              {avg !== undefined && (
-                                <span title="Average placement" className={cn('num text-xs font-semibold', toneText[placementTone(avg)])}>
-                                  {fmt.place(avg)}
-                                </span>
-                              )}
-                              <span className="flex items-center gap-1 text-xs text-fog">
-                                + <ItemIcon id={partner(e, g.base)} px={24} link={false} hover={false} />
-                              </span>
-                            </Link>
-                          </li>
-                        );
-                      })}
+                      {g.list.map((e) => (
+                        <li key={e.key} className="border-t hairline first:border-t-0">
+                          <Link href={`/items/${e.slug}`} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-white/[0.03]">
+                            <ItemIcon id={e.key} px={32} link={false} />
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{e.name.replace(/\s*emblem$/i, '')}</span>
+                            <Avg avg={itemAvg.get(e.key)} className="text-xs" />
+                            <span className="flex items-center gap-1 text-xs text-fog">
+                              + <ItemIcon id={partner(e, g.base)} px={24} link={false} hover={false} />
+                            </span>
+                          </Link>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 ))}
@@ -285,25 +245,15 @@ export default async function GuidesPage() {
               <div className="surface mx-auto w-full max-w-lg overflow-hidden rounded-xl">
                 <h3 className="eyebrow flex h-14 items-center justify-center border-b hairline text-fog">Not craftable</h3>
                 <ul className="grid grid-cols-1 gap-x-2 p-2 min-[420px]:grid-cols-2">
-                  {otherEmblems.map((e) => {
-                    const avg = itemAvg.get(e.key);
-                    return (
-                      <li key={e.key}>
-                        <Link
-                          href={`/items/${e.slug}`}
-                          className="flex items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-white/[0.03]"
-                        >
-                          <ItemIcon id={e.key} px={28} link={false} />
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium">{e.name.replace(/\s*emblem$/i, '')}</span>
-                          {avg !== undefined && (
-                            <span title="Average placement" className={cn('num text-xs font-semibold', toneText[placementTone(avg)])}>
-                              {fmt.place(avg)}
-                            </span>
-                          )}
-                        </Link>
-                      </li>
-                    );
-                  })}
+                  {otherEmblems.map((e) => (
+                    <li key={e.key}>
+                      <Link href={`/items/${e.slug}`} className="flex items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-white/[0.03]">
+                        <ItemIcon id={e.key} px={28} link={false} />
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">{e.name.replace(/\s*emblem$/i, '')}</span>
+                        <Avg avg={itemAvg.get(e.key)} className="text-xs" />
+                      </Link>
+                    </li>
+                  ))}
                 </ul>
               </div>
             )}

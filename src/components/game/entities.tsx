@@ -5,19 +5,12 @@ import type { ChampionLite, TraitLite, TraitStyle } from '@/lib/static/types';
 import { cn } from '@/lib/utils';
 import { GameImage } from './game-image';
 
-/**
- * Champion, item, trait and augment icons. Plain markup (no hooks), so server pages
- * render them without shipping them to the browser. Icons with data-hover get the
- * shared hover card (components/game/hover.tsx).
- */
+/** Game icons as plain markup (no hooks), so server pages render them without shipping them; data-hover feeds hover.tsx. */
 
 const SIZES = { xs: 22, sm: 30, md: 40, ml: 46, lg: 52, xl: 72, '2xl': 96 } as const;
 type IconSize = keyof typeof SIZES;
 
-/**
- * Link an icon and mark it for the hover card: the link carries the mark when there is
- * one, otherwise the icon itself (no wrapper element either way).
- */
+/** Links an icon and marks it for the hover card: the link carries the mark if there is one (no extra wrapper). */
 function linked(body: (hoverProps: object) => ReactNode, href: string | null, label: string, hover: string | null) {
   const mark = hover ? { 'data-hover': hover } : {};
   if (!href) return body(mark);
@@ -28,7 +21,6 @@ function linked(body: (hoverProps: object) => ReactNode, href: string | null, la
   );
 }
 
-/* ── Stars ──────────────────────────────────────────────── */
 const STAR_COLOR: Record<number, string> = { 1: '#b8a58a', 2: '#d8e3ea', 3: '#f5c86a', 4: '#5bd68a' };
 
 export function Stars({ star, className, size }: { star: number; className?: string; size?: number }) {
@@ -72,7 +64,6 @@ export function StarShapes({ star, className, style }: { star: number; className
   );
 }
 
-/* ── Champions ──────────────────────────────────────────── */
 export function Portrait({ champion, px, className }: { champion: ChampionLite; px: number; className?: string }) {
   const radius = Math.max(5, Math.round(px * 0.2));
   const color = costColor(champion.cost);
@@ -106,14 +97,13 @@ export function ChampionIcon({
 }: {
   id: string;
   size?: IconSize;
-  /** Exact portrait size in pixels, instead of one of the preset sizes. */
   px?: number;
   star?: number;
   items?: string[];
   showName?: boolean;
   link?: boolean;
   hover?: boolean;
-  /** Reserve room for a full three-item bar, so a row of units stays evenly spaced whatever each one holds. */
+  /** Reserve room for a full three-item bar, so a row of units stays evenly spaced. */
   even?: boolean;
   className?: string;
 }) {
@@ -145,7 +135,6 @@ export function ChampionIcon({
   );
 }
 
-/* ── Items ──────────────────────────────────────────────── */
 export function ItemIcon({
   id,
   size = 'sm',
@@ -178,7 +167,6 @@ export function ItemIcon({
   );
 }
 
-/* ── Traits ─────────────────────────────────────────────── */
 const STYLE_FILL: Record<TraitStyle, string> = {
   inactive: 'var(--color-bark)',
   bronze: 'linear-gradient(160deg, #e0ad7d, #9a6a3f)',
@@ -191,13 +179,7 @@ const STYLE_FILL: Record<TraitStyle, string> = {
 export function TraitHex({ trait, style, px = 28 }: { trait: TraitLite; style: TraitStyle; px?: number }) {
   return (
     <span className="hex relative grid shrink-0 place-items-center" style={{ width: px, height: px * 0.9, background: STYLE_FILL[style] }}>
-      <GameImage
-        src={trait.icon}
-        alt={trait.name}
-        contain
-        className="h-[62%] w-[62%] bg-transparent"
-        imgClassName={style !== 'inactive' ? 'brightness-0 opacity-80' : 'opacity-75'}
-      />
+      <GameImage src={trait.icon} alt={trait.name} contain className="h-[62%] w-[62%] bg-transparent" imgClassName={style !== 'inactive' ? 'brightness-0 opacity-80' : 'opacity-75'} />
     </span>
   );
 }
@@ -220,7 +202,6 @@ export function TraitBadge({
   matchStyle?: number;
   size?: number;
   showName?: boolean;
-  /** Show the unit count next to the hex (defaults to the breakpoint's size). */
   showCount?: boolean;
   link?: boolean;
   hover?: boolean;
@@ -247,7 +228,6 @@ export function TraitBadge({
   );
 }
 
-/* ── Augments ───────────────────────────────────────────── */
 export function AugmentIcon({ id, px = 32, className }: { id: string; px?: number; className?: string }) {
   const aug = currentIndex().augment(id);
   if (!aug) return null;

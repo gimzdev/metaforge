@@ -5,7 +5,6 @@ import { Art } from '@/components/art';
 import { HeroArt } from '@/components/ui-client';
 import { cn } from '@/lib/utils';
 
-/* ── Buttons ────────────────────────────────────────────── */
 type Variant = 'primary' | 'secondary' | 'ghost' | 'quiet';
 type Size = 'xs' | 'sm' | 'md' | 'lg';
 
@@ -36,7 +35,6 @@ export function ButtonLink({ variant, size, className, ...props }: ComponentProp
   return <Link className={buttonClass(variant, size, className)} {...props} />;
 }
 
-/* ── Panels and headers ─────────────────────────────────── */
 export function Panel({
   title,
   aside,
@@ -49,9 +47,7 @@ export function Panel({
   aside?: ReactNode;
   children: ReactNode;
   className?: string;
-  /** Replaces the default body padding. */
   bodyClassName?: string;
-  /** No body padding (tables and lists that run edge to edge). */
   flush?: boolean;
 }) {
   return (
@@ -67,10 +63,7 @@ export function Panel({
   );
 }
 
-/**
- * Page title row: a small label, a serif title and an optional description, with
- * controls on the right. With `art` the header sits on that picture.
- */
+/** Page title row: serif title, optional description, controls on the right; with `art` it sits on that picture. */
 export function PageHeader({
   title,
   description,
@@ -94,14 +87,13 @@ export function PageHeader({
   if (!art) return <div className="mb-8">{body}</div>;
   return (
     <div className="relative mb-8 overflow-hidden rounded-xl border border-line px-5 pb-7 pt-16 sm:px-8 sm:pb-9 sm:pt-24">
-      <Art src={art} sizes="(min-width: 1400px) 1400px, 100vw" className="object-cover" />
+      <Art src={art} sizes="(min-width: 1400px) 1400px, 100vw" lead className="object-cover" />
       <div className="absolute inset-0 bg-gradient-to-t from-night via-night/80 to-night/20" aria-hidden />
       {body}
     </div>
   );
 }
 
-/** Page header for champion, item, trait and comp pages. */
 export function DetailHero({
   backdrop,
   icon,
@@ -120,10 +112,7 @@ export function DetailHero({
 }) {
   return (
     <section className="relative overflow-hidden rounded-xl border hairline bg-canopy">
-      <HeroArt
-        sources={[backdrop].flat().filter((u): u is string => Boolean(u))}
-        className="absolute inset-0 h-full w-full object-cover object-[center_22%] opacity-40"
-      />
+      <HeroArt sources={[backdrop].flat().filter((u): u is string => Boolean(u))} className="absolute inset-0 h-full w-full object-cover object-[center_22%] opacity-40" />
       <div className="absolute inset-0 bg-gradient-to-r from-canopy via-canopy/90 to-canopy/30" aria-hidden />
       <div className="relative flex flex-col gap-6 p-5 sm:p-8 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex min-w-0 items-center gap-4 sm:gap-6">
@@ -140,7 +129,6 @@ export function DetailHero({
   );
 }
 
-/* ── Controls ───────────────────────────────────────────── */
 export function Select({ className, children, label, ...props }: SelectHTMLAttributes<HTMLSelectElement> & { label?: string }) {
   return (
     <label className={cn('relative inline-flex items-center', className)}>
@@ -213,7 +201,6 @@ export function Chip({ active, children, onClick, className }: { active?: boolea
   );
 }
 
-/** Loading placeholder (rounded-lg unless className sets its own rounding). */
 export function Skeleton({ className = '' }: { className?: string }) {
   return <div className={cn('animate-pulse-soft bg-bark/70', !/\brounded/.test(className) && 'rounded-lg', className)} />;
 }

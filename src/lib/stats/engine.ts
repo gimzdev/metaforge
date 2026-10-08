@@ -4,14 +4,11 @@ import { indexStatic } from '@/lib/static';
 import { NO_PATCH, type Dataset } from './dataset';
 import { ALL, type CompRow, type CompUnit, type Filter, type Scope, type StatRow, type Summary } from './types';
 
-/** Scoping, filtering and aggregation over the column dataset. Pure and synchronous. */
-
+// Scoping, filtering and aggregation over the column dataset. Pure and synchronous.
 interface ScopeIdx {
   region: number; // -1 = all regions, -2 = region without data
   patch: number; // -1 = all patches
 }
-
-const MIN_BOARDS_FOR_DEFAULT_PATCH = 400;
 
 export function resolveScope(ds: Dataset, input: Partial<Scope> = {}): { scope: Scope; idx: ScopeIdx } {
   let region = -1;
@@ -31,12 +28,14 @@ export function resolveScope(ds: Dataset, input: Partial<Scope> = {}): { scope: 
       patchLabel = requested;
     }
   } else if (!requested) {
-    // Default to the live patch once it has a meaningful sample.
-    const last = ds.patches.length - 1;
-    const boards = last >= 0 ? (ds.meta.patches[last]?.boards ?? 0) : 0;
-    if (last >= 0 && boards >= MIN_BOARDS_FOR_DEFAULT_PATCH) {
-      patch = last;
-      patchLabel = ds.patches[last].label;
+    // Default to the live patch, never the whole set: while it is still thin, the stats are noisier but current. Only
+    // when no board of the live patch is stored yet does the newest patch that has some stand in for it.
+    for (let i = ds.patches.length - 1; i >= 0; i--) {
+      if ((ds.meta.patches[i]?.boards ?? 0) > 0) {
+        patch = i;
+        patchLabel = ds.patches[i].label;
+        break;
+      }
     }
   }
   return { scope: { region: regionLabel, patch: patchLabel }, idx: { region, patch } };
@@ -46,10 +45,7 @@ const scopeMemo = new WeakMap<Dataset, Map<string, Int32Array>>();
 
 export function scopeBoards(ds: Dataset, idx: ScopeIdx): Int32Array {
   let memo = scopeMemo.get(ds);
-  if (!memo) {
-    memo = new Map();
-    scopeMemo.set(ds, memo);
-  }
+  if (!memo) scopeMemo.set(ds, (memo = new Map()));
   const key = `${idx.region}|${idx.patch}`;
   const hit = memo.get(key);
   if (hit) return hit;
@@ -80,26 +76,25 @@ function compileOne(ds: Dataset, f: Filter): Pred {
       const stars = f.stars?.length ? new Set(f.stars) : null;
       const required = (f.items ?? []).map((i) => ds.itemIdx.get(i));
       if (required.some((i) => i === undefined)) return f.not ? ALWAYS : NEVER;
-      const minItems = f.minItems ?? 0;
+      const need = required as number[];
+      const minItems = Math.max(f.minItems ?? 0, need.length);
+      // The candidate's items, reused across boards; each required copy uses up one of them.
+      const pool: number[] = [];
       return negate((b) => {
-        for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) {
+        units: for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) {
           if (ds.uChamp[u] !== c) continue;
           if (stars && !stars.has(ds.uStar[u])) continue;
           const i0 = ds.iStart[u];
           const i1 = ds.iStart[u + 1];
-          if (i1 - i0 < Math.max(minItems, required.length)) continue;
-          if (required.length) {
-            const pool = Array.from(ds.iItem.subarray(i0, i1));
-            let ok = true;
-            for (const r of required) {
-              const at = pool.indexOf(r as number);
-              if (at < 0) {
-                ok = false;
-                break;
-              }
-              pool.splice(at, 1);
+          if (i1 - i0 < minItems) continue;
+          if (need.length) {
+            pool.length = 0;
+            for (let i = i0; i < i1; i++) pool.push(ds.iItem[i]);
+            for (const r of need) {
+              const at = pool.indexOf(r);
+              if (at < 0) continue units;
+              pool[at] = -1;
             }
-            if (!ok) continue;
           }
           return true;
         }
@@ -168,14 +163,7 @@ export function summarize(ds: Dataset, boards: Int32Array, total: number): Summa
   }
   const n = boards.length;
   const top4 = placements[0] + placements[1] + placements[2] + placements[3];
-  return {
-    boards: n,
-    total,
-    avg: n ? sum / n : 0,
-    top4: n ? top4 / n : 0,
-    win: n ? placements[0] / n : 0,
-    placements,
-  };
+  return { boards: n, total, avg: n ? sum / n : 0, top4: n ? top4 / n : 0, win: n ? placements[0] / n : 0, placements };
 }
 
 class Acc {
@@ -193,7 +181,7 @@ class Acc {
     this.extra = new Float64Array(size);
     this.stamp = new Int32Array(size).fill(-1);
   }
-  /** Count entity once per board. */
+  /** Counts an entity once per board. */
   hit(i: number, b: number, place: number) {
     if (this.stamp[i] === b) return false;
     this.stamp[i] = b;
@@ -203,21 +191,15 @@ class Acc {
     if (place === 1) this.w[i]++;
     return true;
   }
-  rows(ids: (i: number) => string, boards: number, baseline: number, minN = 1): StatRow[] {
+  /** Rows for every entity seen; `more` adds fields from the entity's index (copies, tier). */
+  rows(ids: (i: number) => string, boards: number, baseline: number, more?: (i: number, n: number) => object): StatRow[] {
     const out: StatRow[] = [];
     for (let i = 0; i < this.n.length; i++) {
       const n = this.n[i];
-      if (n < minN) continue;
+      if (!n) continue;
       const avg = this.sum[i] / n;
-      out.push({
-        id: ids(i),
-        n,
-        freq: boards ? n / boards : 0,
-        avg,
-        delta: avg - baseline,
-        top4: this.t4[i] / n,
-        win: this.w[i] / n,
-      });
+      const row = { id: ids(i), n, freq: boards ? n / boards : 0, avg, delta: avg - baseline, top4: this.t4[i] / n, win: this.w[i] / n };
+      out.push(more ? Object.assign(row, more(i, n)) : row);
     }
     return out;
   }
@@ -249,20 +231,24 @@ export function aggregate(ds: Dataset, boards: Int32Array, baselineAvg: number) 
     levels.hit(Math.min(TIER_SLOTS - 1, ds.level[b]), b, p);
   }
   const n = boards.length;
-  const itemRows = items.rows((i) => ds.itemKeys[i], n, baselineAvg).map((r) => ({
-    ...r,
-    copies: items.extra[ds.itemIdx.get(r.id)!] / r.n,
-  }));
-  const traitRows = traits
-    .rows((i) => `${ds.traitKeys[Math.floor(i / TIER_SLOTS)]}:${i % TIER_SLOTS}`, n, baselineAvg)
-    .map((r) => ({ ...r, tier: Number(r.id.split(':').pop()) }));
   return {
     units: units.rows((i) => ds.champKeys[i], n, baselineAvg),
-    items: itemRows,
-    traits: traitRows,
+    items: items.rows((i) => ds.itemKeys[i], n, baselineAvg, (i, k) => ({ copies: items.extra[i] / k })),
+    traits: traits.rows((i) => `${ds.traitKeys[Math.floor(i / TIER_SLOTS)]}:${i % TIER_SLOTS}`, n, baselineAvg, (i) => ({ tier: i % TIER_SLOTS })),
     augments: augs.rows((i) => ds.augKeys[i], n, baselineAvg),
     levels: levels.rows((i) => String(i), n, baselineAvg),
   };
+}
+
+/** The champion rows of aggregate() alone (all the trend lines compare). */
+export function unitRows(ds: Dataset, boards: Int32Array, baselineAvg: number): StatRow[] {
+  const units = new Acc(ds.champKeys.length);
+  for (let k = 0; k < boards.length; k++) {
+    const b = boards[k];
+    const p = ds.place[b];
+    for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) units.hit(ds.uChamp[u], b, p);
+  }
+  return units.rows((i) => ds.champKeys[i], boards.length, baselineAvg);
 }
 
 /** Every champion at every star level it finished at, as rows keyed "champion:star". */
@@ -276,29 +262,27 @@ export function unitForms(ds: Dataset, boards: Int32Array, baselineAvg: number):
   return forms.rows((i) => `${ds.champKeys[Math.floor(i / 4)]}:${i % 4}`, boards.length, baselineAvg);
 }
 
+const buildMemo = new WeakMap<Dataset, Uint8Array>();
+
 /** 1 for items that belong to a build (completed, emblems, artifacts, radiant, support), else 0. */
 function buildItems(ds: Dataset): Uint8Array {
-  const index = indexStatic(ds.static);
-  const skip = new Set(['component', 'consumable', 'special']);
-  return Uint8Array.from(ds.itemKeys, (key) => {
-    const item = index.item(key);
-    return item && !skip.has(item.category) ? 1 : 0;
-  });
+  let out = buildMemo.get(ds);
+  if (!out) {
+    const index = indexStatic(ds.static);
+    const skip = new Set(['component', 'consumable', 'special']);
+    out = Uint8Array.from(ds.itemKeys, (key) => {
+      const item = index.item(key);
+      return item && !skip.has(item.category) ? 1 : 0;
+    });
+    buildMemo.set(ds, out);
+  }
+  return out;
 }
 
-function modeOf(counts: Map<number, number>): number {
-  let best = -1;
-  let bestN = -1;
-  for (const [k, n] of counts) if (n > bestN) [best, bestN] = [k, n];
-  return best;
-}
+const STAR_SLOTS = 5; // star levels are 1-4 (see columns.ts)
 
 /** Comps (clusters) within a set of boards, with their typical units, items and traits. */
-export function aggregateComps(
-  ds: Dataset,
-  boards: Int32Array,
-  opts: { minN: number; limit: number; only?: number[] },
-): CompRow[] {
+export function aggregateComps(ds: Dataset, boards: Int32Array, opts: { minN: number; limit: number; only?: number[] }): CompRow[] {
   const K = ds.clusters.length;
   const n = new Float64Array(K);
   const sum = new Float64Array(K);
@@ -333,44 +317,57 @@ export function aggregateComps(
   }
   if (!chosen.length) return [];
 
-  const local = new Map(chosen.map((c, j) => [c, j]));
+  // Runs on every explorer and meta request: flat arrays per (comp, champion) and (comp, trait) slot, not nested Maps.
+  const local = new Int32Array(K).fill(-1);
+  chosen.forEach((c, j) => (local[c] = j));
   const C = ds.champKeys.length;
+  const T = ds.traitKeys.length;
+  const I = ds.itemKeys.length;
   const unitCount = new Float64Array(chosen.length * C);
   const stamp = new Int32Array(chosen.length * C).fill(-1);
   const unitItems = new Float64Array(chosen.length * C);
-  const stars = new Map<number, Map<number, number>>();
-  const itemsOn = new Map<number, Map<number, number>>();
-  const traitTiers = new Map<string, Map<number, number>>();
+  // Copies per star level (1-4) of each slot, and when each level was first seen (ties go to the first).
+  const starN = new Float64Array(chosen.length * C * STAR_SLOTS);
+  const starFirst = new Int32Array(chosen.length * C * STAR_SLOTS);
+  let seen = 0;
+  // Per slot: copies of each build item [0, I) and when each was first seen [I, 2I) (ties go to the first).
+  const itemsOn = new Array<Int32Array | undefined>(chosen.length * C);
+  const traitBoards = new Float64Array(chosen.length * T);
+  // The traits the comp's Avatar (Lux) played as, board by board.
+  const avatarVotes = new Float64Array(chosen.length * T);
   for (let i = 0; i < boards.length; i++) {
     const b = boards[i];
-    const j = local.get(ds.comp[b]);
-    if (j === undefined) continue;
+    const c = ds.comp[b];
+    const j = c < 0 ? -1 : local[c];
+    if (j < 0) continue;
     for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) {
       const slot = j * C + ds.uChamp[u];
       if (stamp[slot] !== b) {
         stamp[slot] = b;
         unitCount[slot]++;
       }
-      const st = stars.get(slot) ?? new Map<number, number>();
-      st.set(ds.uStar[u], (st.get(ds.uStar[u]) ?? 0) + 1);
-      stars.set(slot, st);
+      const st = slot * STAR_SLOTS + Math.min(STAR_SLOTS - 1, ds.uStar[u]);
+      if (starN[st]++ === 0) starFirst[st] = ++seen;
       for (let x = ds.iStart[u]; x < ds.iStart[u + 1]; x++) {
         const it = ds.iItem[x];
         // Leftover components, consumables and loot are not part of anyone's build.
         if (!isBuild[it]) continue;
         unitItems[slot]++;
-        const m = itemsOn.get(slot) ?? new Map<number, number>();
-        m.set(it, (m.get(it) ?? 0) + 1);
-        itemsOn.set(slot, m);
+        const m = (itemsOn[slot] ??= new Int32Array(2 * I));
+        if (m[it]++ === 0) m[I + it] = ++seen;
       }
     }
-    for (let t = ds.tStart[b]; t < ds.tStart[b + 1]; t++) {
-      const key = `${j}:${ds.tTrait[t]}`;
-      const m = traitTiers.get(key) ?? new Map<number, number>();
-      m.set(ds.tTier[t], (m.get(ds.tTier[t]) ?? 0) + 1);
-      traitTiers.set(key, m);
-    }
+    for (let t = ds.tStart[b]; t < ds.tStart[b + 1]; t++) traitBoards[j * T + ds.tTrait[t]]++;
+    if (ds.avatarTrait[b] >= 0) avatarVotes[j * T + ds.avatarTrait[b]]++;
   }
+  /** The star level a slot is most often played at. */
+  const usualStar = (slot: number) => {
+    let best = -1;
+    for (let k = slot * STAR_SLOTS, end = k + STAR_SLOTS; k < end; k++) {
+      if (starN[k] && (best < 0 || starN[k] > starN[best] || (starN[k] === starN[best] && starFirst[k] < starFirst[best]))) best = k;
+    }
+    return best < 0 ? -1 : best - slot * STAR_SLOTS;
+  };
 
   const total = boards.length;
   const index = indexStatic(ds.static);
@@ -382,8 +379,8 @@ export function aggregateComps(
     for (let ch = 0; ch < C; ch++) {
       const slot = j * C + ch;
       const f = unitCount[slot] / cnt;
-      if (f < 0.25) continue;
-      units.push({ id: ds.champKeys[ch], freq: f, star: modeOf(stars.get(slot) ?? new Map()), items: [], slot });
+      if (f < 0.12 && ch !== cl.carry) continue;
+      units.push({ id: ds.champKeys[ch], freq: f, star: usualStar(slot), items: [], slot });
     }
     units.sort((a, b) => b.freq - a.freq || ds.champCost[ds.champIdx.get(b.id)!] - ds.champCost[ds.champIdx.get(a.id)!]);
     // The typical board: as many units as these boards usually field (8 at level 8), most played first.
@@ -396,47 +393,45 @@ export function aggregateComps(
       if (exclusive && (index.champion(u.id)?.traits ?? []).some((t) => t.toLowerCase() === exclusive)) {
         if (exclusiveTaken) continue;
         exclusiveTaken = true;
+        // She plays as the trait she took most often on these boards; it counts twice below.
+        let best = -1;
+        for (let t = 0; t < T; t++) if (avatarVotes[j * T + t] > (best < 0 ? 0 : avatarVotes[j * T + best])) best = t;
+        if (best >= 0) u.trait = ds.traitKeys[best];
       }
       board.push(u);
     }
-    // Items: a real board has about as many items as these boards usually hold, and they sit on
-    // the two or three units that hold them game after game. Hand that budget out to the most
-    // consistent holders first, each getting as many items as it usually carries, so the board
-    // reads like one players actually field instead of every unit wearing its occasional items.
+    // Items: the usual item count of these boards, handed out to the most consistent holders first (each as many as
+    // it usually carries), so the board reads like one players field instead of every unit wearing occasional items.
     let budget = Math.round(held[c] / cnt);
-    const holders = [...board].sort((a, b) => unitItems[b.slot] - unitItems[a.slot]);
+    const carryKey = cl.carry >= 0 ? ds.champKeys[cl.carry] : null;
+    // The carry is always on the board and gets its items first.
+    if (carryKey && !board.some((u) => u.id === carryKey)) {
+      const u = units.find((x) => x.id === carryKey);
+      if (u) board[Math.max(0, board.length - 1)] = u;
+    }
+    const holders = [...board].sort((a, b) => Number(b.id === carryKey) - Number(a.id === carryKey) || unitItems[b.slot] - unitItems[a.slot]);
     for (const u of holders) {
       if (budget <= 0) break;
       const perGame = unitItems[u.slot] / Math.max(1, unitCount[u.slot]);
       const take = Math.min(3, budget, Math.round(perGame));
       if (take <= 0) continue;
-      const itemMap = itemsOn.get(u.slot);
-      if (!itemMap) continue;
-      u.items = [...itemMap.entries()]
-        .filter(([, k]) => k / unitCount[u.slot] >= 0.1)
-        .sort((a, b) => b[1] - a[1])
+      const m = itemsOn[u.slot];
+      if (!m) continue;
+      const usual: number[] = [];
+      for (let it = 0; it < I; it++) if (m[it] && m[it] / unitCount[u.slot] >= 0.1) usual.push(it);
+      u.items = usual
+        .sort((a, b) => m[b] - m[a] || m[I + a] - m[I + b])
         .slice(0, take)
-        .map(([it]) => ds.itemKeys[it]);
+        .map((it) => ds.itemKeys[it]);
       budget -= u.items.length;
     }
     const typical: CompUnit[] = board
       .sort((a, b) => ds.champCost[ds.champIdx.get(a.id)!] - ds.champCost[ds.champIdx.get(b.id)!] || b.freq - a.freq)
       .map(({ slot: _slot, ...u }) => u);
-    // Traits are counted from the board shown (its units, their emblems and the set's rules such as
-    // the Avatar's doubled trait), so the summary always adds up to what you see. Only traits that
-    // reach a breakpoint are listed; one-unit traits are left out.
+    // Traits are counted from the board shown (units, emblems, set rules), so the summary adds up to what you see.
     const seenShare = new Map<string, number>();
-    for (const [key, tiers] of traitTiers) {
-      const [jj, t] = key.split(':').map(Number);
-      if (jj !== j) continue;
-      let seen = 0;
-      for (const v of tiers.values()) seen += v;
-      seenShare.set(ds.traitKeys[t], seen / cnt);
-    }
-    const placed = autoPlace(
-      typical.map((u) => ({ key: u.id, star: u.star, items: u.items })),
-      index,
-    );
+    for (let t = 0; t < T; t++) if (traitBoards[j * T + t]) seenShare.set(ds.traitKeys[t], traitBoards[j * T + t] / cnt);
+    const placed = autoPlace(typical.map((u) => ({ key: u.id, star: u.star, items: u.items, trait: u.trait })), index);
     const traitList: CompRow['traits'] = computeTraits(placed, index)
       .filter((t) => t.tier > 0 && t.trait.kind !== 'unique')
       .sort((a, b) => b.count - a.count || b.tier - a.tier || a.trait.name.localeCompare(b.trait.name))
@@ -464,19 +459,9 @@ export function clusterIndex(ds: Dataset, id: string): number {
   return ds.clusters.findIndex((c) => c.id === id);
 }
 
-interface BuildRow {
-  items: string[];
-  n: number;
-  avg: number;
-  top4: number;
-  win: number;
-}
+type BuildRow = { items: string[]; n: number; avg: number; top4: number; win: number };
 
-/**
- * Items one champion holds on the given boards, each counted once per board, against the
- * average of those boards. Answers "what should Aphelios hold" inside any explorer filter,
- * separately from items anywhere on the board.
- */
+/** Items one champion holds on the given boards, once per board, against those boards' average ("what should Aphelios hold"). */
 export function heldItems(ds: Dataset, boards: Int32Array, champKey: string, baselineAvg: number): StatRow[] {
   const c = ds.champIdx.get(champKey);
   if (c === undefined) return [];
@@ -493,15 +478,10 @@ export function heldItems(ds: Dataset, boards: Int32Array, champKey: string, bas
       }
     }
   }
-  return acc
-    .rows((i) => ds.itemKeys[i], boards.length, baselineAvg)
-    .map((r) => ({ ...r, copies: copies[ds.itemIdx.get(r.id)!] / r.n }));
+  return acc.rows((i) => ds.itemKeys[i], boards.length, baselineAvg, (i, n) => ({ copies: copies[i] / n }));
 }
 
-/**
- * The other way round: champions holding one item on the given boards, each counted once per
- * board, against the average of those boards ("who should hold Infinity Edge" inside any filter).
- */
+/** Champions holding one item on the given boards, once per board, against those boards' average ("who holds Infinity Edge"). */
 export function itemHolders(ds: Dataset, boards: Int32Array, itemKey: string, baselineAvg: number): StatRow[] {
   const it = ds.itemIdx.get(itemKey);
   if (it === undefined) return [];
@@ -566,13 +546,7 @@ export function unitInsight(ds: Dataset, boards: Int32Array, champKey: string) {
     itemCounts: countAcc.rows((i) => String(i), n, base),
     items: itemAcc.rows((i) => ds.itemKeys[i], n, base),
     builds: [...builds.entries()]
-      .map(([key, e]) => ({
-        items: key.split(',').map((i) => ds.itemKeys[Number(i)]),
-        n: e.n,
-        avg: e.sum / e.n,
-        top4: e.t4 / e.n,
-        win: e.w / e.n,
-      }))
+      .map(([key, e]) => ({ items: key.split(',').map((i) => ds.itemKeys[Number(i)]), n: e.n, avg: e.sum / e.n, top4: e.t4 / e.n, win: e.w / e.n }))
       .filter((r) => r.n >= 3)
       .sort((a, b) => b.n - a.n)
       .slice(0, 24),

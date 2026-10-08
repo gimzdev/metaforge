@@ -1,11 +1,7 @@
 import type { JSX, SVGProps } from 'react';
 
-/**
- * The Lucide icons (ISC license) the site uses, as plain SVG: the same drawing as lucide-react, with no
- * client code, so server pages render them as markup. Decorative (aria-hidden) unless given a label.
- */
+/** Lucide icons (ISC) as plain SVG with no client code; decorative (aria-hidden) unless given a label. */
 export type Icon = (props: SVGProps<SVGSVGElement>) => JSX.Element;
-/** lucide-react's name for the type. */
 export type LucideIcon = Icon;
 
 const labelled = (props: object) => Object.keys(props).some((k) => k.startsWith('aria-') || k === 'role' || k === 'title');

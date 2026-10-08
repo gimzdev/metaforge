@@ -14,10 +14,22 @@ import { fmt, riotIdToSlug } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
-  title: 'Ladder',
-  description: 'The Teamfight Tactics ranked ladder for every region.',
-};
+/** The ladder ?region= asks for: a platform id; without one (or with anything unknown) the ladder covers all regions. */
+function ladderPlatform(region: string | undefined) {
+  return getPlatform(normalizePlatform(region) ?? '')?.id ?? 'all';
+}
+
+export async function generateMetadata({ searchParams }: { searchParams: SearchParams }): Promise<Metadata> {
+  const platform = ladderPlatform(param(await searchParams, 'region'));
+  const all = platform === 'all';
+  return {
+    title: all ? 'Ladder: all regions' : `${platformLabel(platform)} ladder`,
+    description: all
+      ? 'The top Teamfight Tactics ranked players from every region, by LP.'
+      : `The Teamfight Tactics ranked ladder for ${getPlatform(platform)?.name ?? platformLabel(platform)}: the top 100 players by LP.`,
+    alternates: { canonical: all ? '/leaderboard' : `/leaderboard?region=${platform}` },
+  };
+}
 
 async function Ladder({ platform }: { platform: string }) {
   let data: Awaited<ReturnType<typeof getLeaderboard>>;
@@ -26,10 +38,10 @@ async function Ladder({ platform }: { platform: string }) {
   } catch (error) {
     const message =
       error instanceof RiotError
-        ? error.code === 'rate'
+        ? error.code === 'rate' || error.code === 'budget'
           ? 'The Riot API is rate limiting right now. Give it a minute and reload.'
-          : error.code === 'key'
-            ? 'The Riot API key was rejected. Development keys expire every 24 hours.'
+          : error.code === 'key' || error.code === 'config'
+            ? 'MetaForge cannot reach the Riot API right now. Try again later.'
             : error.message
         : 'The ladder could not be loaded.';
     return (
@@ -65,12 +77,8 @@ async function Ladder({ platform }: { platform: string }) {
                 <th className="h-10 px-3 text-left font-medium">Tier</th>
                 <th className="h-10 px-3 text-right font-medium">LP</th>
                 <th className="hidden h-10 px-3 text-right font-medium sm:table-cell">Games</th>
-                <th className="hidden h-10 px-3 text-right font-medium md:table-cell" title="Top 4 finishes">
-                  Top 4s
-                </th>
-                <th className="h-10 px-4 text-right font-medium" title="Share of games finished in the top 4">
-                  Top 4 rate
-                </th>
+                <th className="hidden h-10 px-3 text-right font-medium md:table-cell" title="Top 4 finishes">Top 4s</th>
+                <th className="h-10 px-4 text-right font-medium" title="Share of games finished in the top 4">Top 4 rate</th>
               </tr>
             </thead>
             <tbody>
@@ -79,13 +87,10 @@ async function Ladder({ platform }: { platform: string }) {
                   <td className="num h-12 px-4 text-lichen">{e.rank}</td>
                   <td className="h-12 max-w-[240px] px-3">
                     {e.gameName && e.tagLine ? (
-                      <Link
-                        href={`/player/${e.platform}/${riotIdToSlug(e.gameName, e.tagLine)}`}
-                        className="inline-flex max-w-full items-center gap-1.5 font-medium text-moon hover:text-wisp"
-                      >
+                      <Link href={`/player/${e.platform}/${riotIdToSlug(e.gameName, e.tagLine)}`} className="inline-flex max-w-full items-center gap-1.5 font-medium text-moon hover:text-wisp">
                         <span className="truncate">{e.gameName}</span>
                         <span className="shrink-0 text-fog">#{e.tagLine}</span>
-                        {e.hotStreak && <Flame className="size-3.5 shrink-0 text-firefly" aria-label="Hot streak" />}
+                        {e.hotStreak && <Flame className="size-3.5 shrink-0 text-firefly" role="img" aria-label="Hot streak" />}
                       </Link>
                     ) : (
                       <span className="text-fog">Name pending</span>
@@ -119,17 +124,13 @@ async function Ladder({ platform }: { platform: string }) {
 function LadderSkeleton() {
   return (
     <div className="space-y-2 rounded-xl border hairline p-4">
-      {Array.from({ length: 12 }, (_, i) => (
-        <Skeleton key={i} className="h-10 w-full" />
-      ))}
+      {Array.from({ length: 12 }, (_, i) => <Skeleton key={i} className="h-10 w-full" />)}
     </div>
   );
 }
 
 export default async function LeaderboardPage({ searchParams }: { searchParams: SearchParams }) {
-  const sp = await searchParams;
-  const region = param(sp, 'region');
-  const platform = region?.toLowerCase() === 'all' ? 'all' : (getPlatform(normalizePlatform(region) ?? 'na1')?.id ?? 'na1');
+  const platform = ladderPlatform(param(await searchParams, 'region'));
   return (
     <div className="space-y-6">
       <PageHeader title="Ladder" art={brand.fight}>

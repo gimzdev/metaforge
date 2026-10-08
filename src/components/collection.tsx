@@ -16,14 +16,9 @@ type SortKey = 'default' | 'avg' | 'freq' | 'name';
 
 export type CollectionTab = 'champions' | 'traits' | 'items' | 'augments';
 type Tab = CollectionTab;
-
 const COLLAPSED: Record<Tab, number> = { champions: 20, traits: 9, items: 20, augments: 18 };
 
-/**
- * The collapsed preview renders COLLAPSED[tab] cards and hides the tail per
- * breakpoint, so it always ends on a full row (champion and item tiles are
- * 4/5/8/10 wide, traits and augments 1/2/3) and stays short on phones.
- */
+/** Hides the collapsed preview's tail per breakpoint so it ends on a full row (tiles 4/5/8/10 wide, cards 1/2/3) and stays short on phones. */
 function peek(tab: Tab, i: number): string | undefined {
   switch (tab) {
     case 'champions':
@@ -35,8 +30,9 @@ function peek(tab: Tab, i: number): string | undefined {
       return cn(i >= 8 && 'max-sm:hidden') || undefined;
   }
 }
-/** Champion and item tiles: the art fills each tile, 10 to a row on desktop. */
 const TILE_GRID = 'grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-10';
+
+const TILE = 'group relative overflow-hidden rounded-xl border hairline bg-canopy transition hover:-translate-y-0.5 hover:border-lichen/40';
 
 const ITEM_TABS: ItemCategory[] = ['completed', 'component', 'emblem', 'artifact', 'radiant', 'support'];
 const AUG_TIERS = ['silver', 'gold', 'prismatic'] as const;
@@ -44,13 +40,7 @@ const AUG_TIERS = ['silver', 'gold', 'prismatic'] as const;
 function AvgTag({ value, small = false }: { value: number | undefined; small?: boolean }) {
   if (value === undefined) return null;
   return (
-    <span
-      className={cn(
-        'num rounded-md bg-night/85 font-semibold',
-        small ? 'px-1 py-px text-[10px]' : 'px-1.5 py-0.5 text-[11px]',
-        toneText[placementTone(value)],
-      )}
-    >
+    <span className={cn('num rounded-md bg-night/85 font-semibold', small ? 'px-1 py-px text-[10px]' : 'px-1.5 py-0.5 text-[11px]', toneText[placementTone(value)])}>
       {fmt.place(value)}
     </span>
   );
@@ -78,11 +68,7 @@ export function Collection({
   const needle = query.trim().toLowerCase();
 
   /** Best average first; play rate most played first; entries without enough games go last. */
-  const bySort = <T extends { key: string; name: string }>(
-    list: T[],
-    map: StatMap | undefined,
-    fallback: (a: T, b: T) => number,
-  ) => {
+  const bySort = <T extends { key: string; name: string }>(list: T[], map: StatMap | undefined, fallback: (a: T, b: T) => number) => {
     if (sort === 'name') return list.sort((a, b) => a.name.localeCompare(b.name));
     if ((sort === 'avg' || sort === 'freq') && map) {
       const col = sort === 'avg' ? 0 : 1;
@@ -100,13 +86,10 @@ export function Collection({
   const champions = useMemo(
     () =>
       bySort(
-        index.data.champions.filter(
-          (c) => (cost === null || Math.min(c.cost, 6) === cost) && (!needle || c.name.toLowerCase().includes(needle)),
-        ),
+        index.data.champions.filter((c) => (cost === null || Math.min(c.cost, 6) === cost) && (!needle || c.name.toLowerCase().includes(needle))),
         stats?.units,
         (a, b) => a.cost - b.cost || a.name.localeCompare(b.name),
       ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [index, cost, needle, sort, stats],
   );
   const traits = useMemo(
@@ -125,7 +108,6 @@ export function Collection({
         stats?.items,
         (a, b) => ITEM_TABS.indexOf(a.category) - ITEM_TABS.indexOf(b.category) || a.name.localeCompare(b.name),
       ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [index, itemCat, needle, sort, stats],
   );
   const augments = useMemo(
@@ -136,16 +118,10 @@ export function Collection({
     [index, augTier, needle],
   );
 
-  // Everything the Items tab can show: all its categories, not only the one picked below it.
+  // All the Items tab's categories, not only the one picked.
   const itemTotal = useMemo(() => index.data.items.filter((i) => ITEM_TABS.includes(i.category)).length, [index]);
 
-  const counts: Record<Tab, number> = {
-    champions: champions.length,
-    traits: traits.length,
-    items: items.length,
-    augments: augments.length,
-  };
-  const total = counts[tab];
+  const total = { champions, traits, items, augments }[tab].length;
   const limit = expanded || needle ? total : COLLAPSED[tab];
   const hidden = Math.max(0, total - limit);
   const trim = (i: number) => (hidden > 0 ? peek(tab, i) : undefined);
@@ -156,19 +132,13 @@ export function Collection({
   };
 
   return (
-    <section
-      aria-labelledby={title === null ? undefined : 'collection-title'}
-      aria-label={title === null ? 'Collection' : undefined}
-      className="space-y-4"
-    >
+    <section aria-labelledby={title === null ? undefined : 'collection-title'} aria-label={title === null ? 'Collection' : undefined} className="space-y-4">
       {title !== null && (
         <div>
           <h2 id="collection-title" className="text-[1.75rem] leading-tight">
             {title ?? `The ${index.data.set.name} collection`}
           </h2>
-          <p className="mt-1.5 text-sm text-lichen">
-            Every champion, trait, item and augment in the set, from the live game data.
-          </p>
+          <p className="mt-1.5 text-sm text-lichen">Every champion, trait, item and augment in the set, from the live game data.</p>
         </div>
       )}
 
@@ -180,9 +150,7 @@ export function Collection({
             { value: 'champions', label: 'Champions', count: index.data.champions.length },
             { value: 'traits', label: 'Traits', count: index.data.traits.length },
             { value: 'items', label: 'Items', count: itemTotal },
-            ...(index.data.augments.length
-              ? [{ value: 'augments' as const, label: 'Augments', count: index.data.augments.length }]
-              : []),
+            ...(index.data.augments.length ? [{ value: 'augments' as const, label: 'Augments', count: index.data.augments.length }] : []),
           ]}
         />
         <label className="flex h-10 shrink-0 items-center gap-2 rounded-lg border border-line-strong bg-canopy px-3 focus-within:border-lichen/45 md:w-72">
@@ -236,12 +204,7 @@ export function Collection({
               onChange={setSort}
               options={[
                 { value: 'default' as const, label: tab === 'champions' ? 'Cost' : 'Type' },
-                ...(stats
-                  ? [
-                      { value: 'avg' as const, label: 'Avg place' },
-                      { value: 'freq' as const, label: 'Play rate' },
-                    ]
-                  : []),
+                ...(stats ? [{ value: 'avg' as const, label: 'Avg place' }, { value: 'freq' as const, label: 'Play rate' }] : []),
                 { value: 'name' as const, label: 'A–Z' },
               ]}
             />
@@ -250,28 +213,14 @@ export function Collection({
       </div>
 
       {total === 0 && (
-        <div className="rounded-xl border border-dashed border-line-strong p-10 text-center text-sm text-lichen">
-          Nothing matches “{query}”.
-        </div>
+        <div className="rounded-xl border border-dashed border-line-strong p-10 text-center text-sm text-lichen">Nothing matches “{query}”.</div>
       )}
 
       {tab === 'champions' && total > 0 && (
         <div className={TILE_GRID}>
           {champions.slice(0, limit).map((c, n) => (
-            <Link
-              key={c.key}
-              href={`/units/${c.slug}`}
-              className={cn(
-                'group relative overflow-hidden rounded-xl border hairline bg-canopy transition hover:-translate-y-0.5 hover:border-lichen/40',
-                trim(n),
-              )}
-            >
-              <GameImage
-                src={c.tile ?? c.icon}
-                alt={c.name}
-                className="aspect-square w-full"
-                imgClassName="transition-transform duration-300 group-hover:scale-[1.06]"
-              />
+            <Link key={c.key} href={`/units/${c.slug}`} className={cn(TILE, trim(n))}>
+              <GameImage src={c.tile ?? c.icon} alt={c.name} className="aspect-square w-full" imgClassName="transition-transform duration-300 group-hover:scale-[1.06]" />
               <span className="absolute right-1 top-1">
                 <AvgTag value={stats?.units[c.key]?.[0]} small />
               </span>
@@ -293,11 +242,7 @@ export function Collection({
       {tab === 'traits' && total > 0 && (
         <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
           {traits.slice(0, limit).map((t, n) => (
-            <Link
-              key={t.key}
-              href={`/traits/${t.slug}`}
-              className={cn('surface group flex gap-3 rounded-xl p-3.5 transition-colors hover:border-lichen/40', trim(n))}
-            >
+            <Link key={t.key} href={`/traits/${t.slug}`} className={cn('surface group flex gap-3 rounded-xl p-3.5 transition-colors hover:border-lichen/40', trim(n))}>
               <TraitHex trait={t} style={styleFor(t, t.effects.length)} px={40} />
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline justify-between gap-2">
@@ -307,11 +252,7 @@ export function Collection({
                 {t.effects.length > 0 && (
                   <span className="mt-1 flex flex-wrap gap-1">
                     {t.effects.map((e) => (
-                      <span
-                        key={e.minUnits}
-                        className="num rounded-md bg-night/70 px-1.5 text-[11px] font-semibold"
-                        style={{ color: `var(--color-style-${e.style})` }}
-                      >
+                      <span key={e.minUnits} className="num rounded-md bg-night/70 px-1.5 text-[11px] font-semibold" style={{ color: `var(--color-style-${e.style})` }}>
                         {e.minUnits}
                       </span>
                     ))}
@@ -336,14 +277,7 @@ export function Collection({
       {tab === 'items' && total > 0 && (
         <div className={TILE_GRID}>
           {items.slice(0, limit).map((i, n) => (
-            <Link
-              key={i.key}
-              href={`/items/${i.slug}`}
-              className={cn(
-                'group relative overflow-hidden rounded-xl border hairline bg-canopy transition hover:-translate-y-0.5 hover:border-lichen/40',
-                trim(n),
-              )}
-            >
+            <Link key={i.key} href={`/items/${i.slug}`} className={cn(TILE, trim(n))}>
               {/* Same square tile as the champions, but the icon sits inside it at a calmer size. */}
               <span className="flex aspect-square w-full items-start justify-center pt-[11%]">
                 <GameImage
@@ -371,7 +305,8 @@ export function Collection({
               key={a.key}
               tabIndex={0}
               data-hover={`a:${a.key}`}
-              className={cn('surface flex gap-3 rounded-xl p-3 outline-none focus-visible:border-lichen/45', trim(n))}
+              // Focusable so the keyboard reaches its hover card; it shows the site's focus ring, as the linked tiles do.
+              className={cn('surface flex gap-3 rounded-xl p-3 focus-visible:border-lichen/45', trim(n))}
             >
               <GameImage src={a.icon} alt={a.name} className="size-10 shrink-0 rounded-lg" />
               <span className="min-w-0">
@@ -401,11 +336,9 @@ export function Collection({
   );
 }
 
-/**
- * Endless CSS marquee that eases down to a crawl while hovered or focused
- * (instead of stopping dead), so you can still read and click an entry.
- */
-export function MarqueeTrack({ children, duration, slow = 0.22 }: { children: ReactNode; duration: number; slow?: number }) {
+/** Endless CSS marquee that eases down to a crawl (not a dead stop) while hovered or focused, so entries stay readable and clickable. */
+export function MarqueeTrack({ children, duration }: { children: ReactNode; duration: number }) {
+  const slow = 0.22;
   const ref = useRef<HTMLDivElement>(null);
   const frame = useRef<number | null>(null);
 

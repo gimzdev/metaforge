@@ -1,5 +1,3 @@
-/** Small helpers shared by the server and the browser. */
-
 type ClassPart = string | false | null | undefined | 0;
 
 /** Joins class names. Pass classes that don't conflict: the stylesheet order decides, not this. */
@@ -26,11 +24,7 @@ export const fmt = {
   /** 0.1234 → "12.3%" */
   pct: (ratio: number, digits = 1) => (Number.isFinite(ratio) ? `${(ratio * 100).toFixed(digits)}%` : '–'),
   place: (avg: number) => (Number.isFinite(avg) && avg > 0 ? avg.toFixed(2) : '–'),
-  delta(d: number) {
-    if (!Number.isFinite(d)) return '–';
-    const s = d.toFixed(2);
-    return d > 0 ? `+${s}` : s;
-  },
+  delta: (d: number) => (!Number.isFinite(d) ? '–' : `${d > 0 ? '+' : ''}${d.toFixed(2)}`),
   ordinal(n: number) {
     const s = ['th', 'st', 'nd', 'rd'];
     const v = n % 100;
@@ -44,9 +38,12 @@ export const fmt = {
     const h = Math.round(min / 60);
     return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
   },
-  date: (ts: number | string) =>
-    new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }),
-  duration: (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}`,
+  date: (ts: number | string) => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }),
+  /** 1859.7 → "31:00" (rounded first: rounding the seconds alone would print "30:60"). */
+  duration(seconds: number) {
+    const s = Math.round(seconds);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  },
 };
 
 /** Tone for an average placement: lower is better, 4.5 is a coin flip. */
@@ -58,13 +55,7 @@ export function placementTone(avg: number): 'great' | 'good' | 'even' | 'poor' |
   return avg < 4.95 ? 'poor' : 'bad';
 }
 
-export const toneText: Record<ReturnType<typeof placementTone>, string> = {
-  great: 'text-good',
-  good: 'text-fern',
-  even: 'text-moon',
-  poor: 'text-ember',
-  bad: 'text-bloom',
-};
+export const toneText: Record<ReturnType<typeof placementTone>, string> = { great: 'text-good', good: 'text-fern', even: 'text-moon', poor: 'text-ember', bad: 'text-bloom' };
 
 export function deltaTone(delta: number) {
   if (!Number.isFinite(delta) || Math.abs(delta) < 0.05) return 'text-lichen';
@@ -74,10 +65,7 @@ export function deltaTone(delta: number) {
 /** Trait stat rows are keyed "traitKey:tier". */
 export const traitOf = (rowId: string) => rowId.slice(0, rowId.lastIndexOf(':'));
 
-/**
- * A copy with every fractional number cut to 9 significant digits. Stats go to browsers as JSON, where
- * full doubles are mostly noise digits: payloads shrink by about a third and nothing shown changes.
- */
+/** A copy with fractions cut to 9 significant digits: stats JSON shrinks by about a third and nothing shown changes. */
 export function trimFloats<T>(value: T): T {
   if (typeof value === 'number') return (Number.isInteger(value) || !Number.isFinite(value) ? value : Number(value.toPrecision(9))) as T;
   if (Array.isArray(value)) return value.map(trimFloats) as T;
@@ -85,7 +73,6 @@ export function trimFloats<T>(value: T): T {
   return value;
 }
 
-/** Base64url JSON, used to keep filters and boards in shareable URLs. */
 export function encodeState(value: unknown): string {
   let bin = '';
   for (const b of new TextEncoder().encode(JSON.stringify(value))) bin += String.fromCharCode(b);
@@ -132,3 +119,20 @@ export function parseRiotId(input: string): { gameName: string; tagLine: string 
 }
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * How a player name matches a search (case-insensitive): 0 the whole name, 1 its start, 2 the start of a later word
+ * ("volta" in "SLY Voltariux"), 3 anywhere else (3+ characters typed); -1 no match. Lower ranks first.
+ */
+export function nameMatch(name: string, q: string): number {
+  const n = name.toLowerCase();
+  const s = q.trim().toLowerCase();
+  if (!s) return -1;
+  if (n === s) return 0;
+  if (n.startsWith(s)) return 1;
+  if (s.length < 3) return -1;
+  const at = n.indexOf(s);
+  if (at < 0) return -1;
+  for (let i = at; i >= 0; i = n.indexOf(s, i + 1)) if (!/[\p{L}\p{N}]/u.test(n[i - 1])) return 2;
+  return 3;
+}

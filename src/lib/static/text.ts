@@ -1,63 +1,27 @@
 import type { RichSeg, RichText } from './types';
 
-/**
- * Turn CommunityDragon description markup into safe, structured segments.
- * Handles <tags>, %i:scaleXX% stat icons and @Variable@ placeholders. Values
- * are looked up by name, by the game's hashed name ({fnv1a}) and by the plain
- * data value behind a "Modified…"/"…Calc" tooltip. Anything still unknown is
- * left out rather than shown as a raw label or an invented number.
- */
+// CommunityDragon description markup (<tags>, %i:scaleXX% stat icons, @Variable@ placeholders) as safe, structured segments.
+// Values are looked up by name, by the game's hashed name ({fnv1a}) and by the data value behind a "Modified…"/"…Calc"
+// tooltip; anything still unknown is left out rather than shown as a raw label or an invented number.
 
 type VarLookup = (name: string) => number | number[] | null | undefined;
 
 const STYLE_TAGS: Record<string, string> = {
-  magicdamage: 'magic',
-  physicaldamage: 'physical',
-  truedamage: 'true',
-  tftbonus: 'bonus',
-  scalebonus: 'bonus',
-  tfthighlight: 'bonus',
-  scalehealth: 'heal',
-  healing: 'heal',
-  tfthealing: 'heal',
-  shield: 'shield',
-  tftshield: 'shield',
-  rules: 'rules',
-  tftitemrules: 'rules',
-  tftkeyword: 'keyword',
-  keyword: 'keyword',
-  status: 'keyword',
-  spellpassive: 'label',
-  spellactive: 'label',
-  tftguide: 'rules',
+  magicdamage: 'magic', physicaldamage: 'physical', truedamage: 'true',
+  tftbonus: 'bonus', scalebonus: 'bonus', tfthighlight: 'bonus',
+  scalehealth: 'heal', healing: 'heal', tfthealing: 'heal',
+  shield: 'shield', tftshield: 'shield',
+  rules: 'rules', tftitemrules: 'rules', tftguide: 'rules',
+  tftkeyword: 'keyword', keyword: 'keyword', status: 'keyword',
+  spellpassive: 'label', spellactive: 'label',
 };
 
 const ICON_LABELS: Record<string, string> = {
-  scaleap: 'AP',
-  scalead: 'AD',
-  scalearmor: 'Armor',
-  scalemr: 'MR',
-  scalehealth: 'Health',
-  scaleas: 'AS',
-  scalemana: 'Mana',
-  scalecrit: 'Crit',
-  scalecritmult: 'Crit Dmg',
-  scalesv: 'Omnivamp',
-  scaleda: 'Dmg Amp',
-  scaledr: 'Durability',
-  scalerange: 'Range',
-  scalegold: 'Gold',
+  scaleap: 'AP', scalead: 'AD', scalearmor: 'Armor', scalemr: 'MR', scalehealth: 'Health', scaleas: 'AS', scalemana: 'Mana',
+  scalecrit: 'Crit', scalecritmult: 'Crit Dmg', scalesv: 'Omnivamp', scaleda: 'Dmg Amp', scaledr: 'Durability', scalerange: 'Range', scalegold: 'Gold',
 };
 
-const ENTITIES: Record<string, string> = {
-  '&nbsp;': ' ',
-  '&amp;': '&',
-  '&lt;': '<',
-  '&gt;': '>',
-  '&quot;': '"',
-  '&#39;': "'",
-  '&apos;': "'",
-};
+const ENTITIES: Record<string, string> = { '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'" };
 
 function decodeEntities(text: string) {
   return text.replace(/&(nbsp|amp|lt|gt|quot|apos|#39);/g, (m) => ENTITIES[m] ?? m);
@@ -99,17 +63,14 @@ function fnv1a(name: string): string {
   return h.toString(16).padStart(8, '0');
 }
 
+const CALC_PREFIX = /^(Modified|Tooltip|Total|Calculated|Final|Scaled|Display)(?=[A-Z])/;
+const CALC_SUFFIX = /(Calc|Calculation|Tooltip|Display)\d*$/i;
+
 /** Names worth trying for a placeholder: itself, then the data value behind a tooltip calc. */
 function candidateNames(name: string): string[] {
   const out = [name];
   const base = name.replace(/^TFT\d*_/i, '');
-  const stems = [
-    base,
-    base.replace(/^(Modified|Tooltip|Total|Calculated|Final|Scaled|Display)(?=[A-Z])/, ''),
-    base.replace(/(Calc|Calculation|Tooltip|Display)\d*$/i, ''),
-    base.replace(/^(Modified|Tooltip|Total|Calculated|Final|Scaled|Display)(?=[A-Z])/, '').replace(/(Calc|Calculation|Tooltip|Display)\d*$/i, ''),
-  ];
-  for (const stem of stems) {
+  for (const stem of [base, base.replace(CALC_PREFIX, ''), base.replace(CALC_SUFFIX, ''), base.replace(CALC_PREFIX, '').replace(CALC_SUFFIX, '')]) {
     if (stem.length >= 3 && !out.includes(stem)) out.push(stem);
   }
   return out;
@@ -129,17 +90,11 @@ function lookupAny(name: string, lookup: VarLookup) {
 const CALC_TOKEN = /(Calc|Calculation)\d*$|^(Modified|Tooltip|Total|Calculated)[A-Z]/;
 
 /**
- * Newer spells print totals through tooltip calculations ("@MagicDamageCalc1@")
- * that CommunityDragon doesn't publish, while the base numbers behind them are
- * in the ability's variables (often under hashed names). Map each unresolved
- * calc, in the order the text uses them, to the next unused per-star amount
- * (at least 10 and growing with star level: damage, healing, shields), which is
- * what the tooltip shows at base stats. Percent-style values are left alone.
+ * Newer spells print totals through tooltip calcs ("@MagicDamageCalc1@") CommunityDragon doesn't publish, while the base
+ * numbers are in the ability's variables (often hashed). Map each unresolved calc, in text order, to the next unused
+ * per-star amount (at least 10 and growing with star level), which the tooltip shows at base stats. Percents are left alone.
  */
-export function inferCalcValues(
-  desc: string,
-  variables: Array<{ name?: string; value?: unknown }> | null | undefined,
-): Map<string, number[]> {
+export function inferCalcValues(desc: string, variables: Array<{ name?: string; value?: unknown }> | null | undefined): Map<string, number[]> {
   const table = new Map<string, number[]>();
   const order: string[] = [];
   for (const v of variables ?? []) {
@@ -196,9 +151,7 @@ function resolveVar(expr: string, lookup: VarLookup): RichSeg | null {
   if (Array.isArray(raw)) {
     // CDragon star arrays: index 1..3 hold the 1★..3★ values.
     const stars = raw.length >= 4 ? raw.slice(1, 4) : raw;
-    const values = stars
-      .map((v) => (typeof v === 'number' ? applyOp(v, op, operand) : NaN))
-      .filter((v) => Number.isFinite(v));
+    const values = stars.map((v) => (typeof v === 'number' ? applyOp(v, op, operand) : NaN)).filter((v) => Number.isFinite(v));
     if (!values.length || values.every((v) => v === 0)) return null;
     const uniq = values.every((v) => v === values[0]);
     return { k: 'v', v: uniq ? formatNumber(values[0]) : values.map(formatNumber).join('/') };
@@ -301,9 +254,7 @@ export function splitTraitDescription(desc: string): { header: string; rows: str
 export function mapLookup(vars: Record<string, unknown> | null | undefined, extra: Record<string, number> = {}): VarLookup {
   const table = new Map<string, number | number[]>();
   for (const [k, v] of Object.entries(vars ?? {})) {
-    if (typeof v === 'number' || (Array.isArray(v) && v.every((x) => typeof x === 'number'))) {
-      table.set(k.toLowerCase(), v as number | number[]);
-    }
+    if (typeof v === 'number' || (Array.isArray(v) && v.every((x) => typeof x === 'number'))) table.set(k.toLowerCase(), v as number | number[]);
   }
   for (const [k, v] of Object.entries(extra)) table.set(k.toLowerCase(), v);
   return (name) => table.get(name.toLowerCase());

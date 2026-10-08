@@ -10,6 +10,8 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = {
   title: 'Meta report',
   description: 'TFT comp tier list plus champion, item and trait tier lists from ranked games on the live patch.',
+  // ?region= and ?patch= views are variants of this page.
+  alternates: { canonical: '/meta' },
 };
 
 export default async function MetaPage({ searchParams }: { searchParams: SearchParams }) {

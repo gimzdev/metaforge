@@ -46,15 +46,9 @@ export function RichText({ value, className }: { value: Rich; className?: string
         if (seg.k === 'v') {
           // Values the game data doesn't publish are left out (older caches may still carry them).
           if (!seg.v) return null;
-          return (
-            <span key={i} className={cn('num font-semibold', (seg.s && STYLE[seg.s]) || 'text-moon')}>
-              {seg.v}
-            </span>
-          );
+          return <span key={i} className={cn('num font-semibold', (seg.s && STYLE[seg.s]) || 'text-moon')}>{seg.v}</span>;
         }
-        return (
-          <Fragment key={i}>{seg.s ? <span className={STYLE[seg.s]}>{seg.v}</span> : seg.v}</Fragment>
-        );
+        return <Fragment key={i}>{seg.s ? <span className={STYLE[seg.s]}>{seg.v}</span> : seg.v}</Fragment>;
       })}
     </span>
   );

@@ -19,14 +19,10 @@ function Logo({ className }: { className?: string }) {
 
 /** Your logo from public/assets/app (the anvil ships with the installer), otherwise the built-in mark. */
 function BrandMark({ className }: { className?: string }) {
-  if (brand.logo) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img {...logoArt(brand.logo)} alt="" aria-hidden className={cn('shrink-0 object-contain', className)} />;
-  }
+  if (brand.logo) return <img {...logoArt(brand.logo)} alt="" aria-hidden className={cn('shrink-0 object-contain', className)} />;
   return <Logo className={cn('shrink-0', className)} />;
 }
 
-/** Logo plus the serif MetaForge wordmark. */
 export function Wordmark({ className, size = 'md' }: { className?: string; size?: 'md' | 'lg' }) {
   return (
     <span className={cn('flex items-center gap-3', className)}>

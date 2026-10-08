@@ -28,17 +28,16 @@ export async function GET(req: NextRequest) {
       },
       body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: env.rsoRedirectUri }),
       cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
     });
     if (!tokenRes.ok) return fail('signin_token');
     const token = (await tokenRes.json()) as { access_token?: string };
     if (!token.access_token) return fail('signin_token');
-    const account = await riotGet<AccountDto>('americas', '/riot/account/v1/accounts/me', { token: token.access_token });
+    const account = await riotGet<AccountDto>('americas', '/riot/account/v1/accounts/me', { token: token.access_token, deadline: Date.now() + 15_000 });
+    if (!account?.puuid) return fail('signin_failed');
     const res = NextResponse.redirect(new URL('/profile', req.url));
-    res.cookies.set(
-      SESSION_COOKIE,
-      signSession({ puuid: account.puuid, gameName: account.gameName ?? 'Player', tagLine: account.tagLine ?? '' }),
-      sessionCookieOptions,
-    );
+    const session = signSession({ puuid: account.puuid, gameName: account.gameName ?? 'Player', tagLine: account.tagLine ?? '' });
+    res.cookies.set(SESSION_COOKIE, session, sessionCookieOptions);
     res.cookies.set(STATE_COOKIE, '', { path: '/', maxAge: 0 });
     return res;
   } catch {

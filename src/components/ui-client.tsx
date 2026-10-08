@@ -7,9 +7,9 @@ import { ChevronDown, RefreshCw } from '@/components/icons';
 import { bannerArt } from '@/components/art';
 import { openCard } from '@/components/game/hover';
 import { floatingSize, placeFloating } from '@/lib/floating';
-import { cn } from '@/lib/utils';
+import { cn, safeDecode } from '@/lib/utils';
 
-/** Elements Tab would reach inside a container, in order (links left out, as dialogs do). */
+/** The first element Tab would reach inside a container (links left out, as dialogs do). */
 function firstTabbable(container: HTMLElement): HTMLElement | null {
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT, {
     acceptNode: (node) => {
@@ -21,12 +21,8 @@ function firstTabbable(container: HTMLElement): HTMLElement | null {
   return walker.nextNode() as HTMLElement | null;
 }
 
-/**
- * A panel under an anchor element (start-aligned; above it when only that fits; kept 12px
- * inside the window sideways; following the anchor). Opening focuses its first control;
- * Escape, a press outside or focus moving away closes it, and focus goes back to the anchor
- * unless the user moved on elsewhere.
- */
+// A panel under an anchor (above when only that fits), following it. Opening focuses its first control; Escape, a press
+// outside or focus moving away closes it, and focus returns to the anchor unless the user moved on elsewhere.
 export function Popover({
   open,
   onOpenChange,
@@ -60,13 +56,13 @@ export function Popover({
     // The page changing around the anchor (a chip growing, rows above it) moves it.
     const mo = new MutationObserver(place);
     mo.observe(document.body, { childList: true, subtree: true, characterData: true });
-    window.addEventListener('scroll', place, true);
-    window.addEventListener('resize', place);
+    const ctl = new AbortController();
+    window.addEventListener('scroll', place, { capture: true, signal: ctl.signal });
+    window.addEventListener('resize', place, { signal: ctl.signal });
     return () => {
       ro.disconnect();
       mo.disconnect();
-      window.removeEventListener('scroll', place, true);
-      window.removeEventListener('resize', place);
+      ctl.abort();
     };
   }, [open, anchor]);
 
@@ -85,12 +81,7 @@ export function Popover({
     // A hover card opened from an icon in the panel counts as part of the panel.
     const inPanelCard = (t: Node) => Boolean(openCard.card?.contains(t) && openCard.anchor && box.current?.contains(openCard.anchor));
     const outside = (t: EventTarget | null) => t instanceof Node && !box.current?.contains(t) && !anchor.current?.contains(t) && !inPanelCard(t);
-    const down = (e: PointerEvent) => {
-      if (!outside(e.target)) return;
-      movedOn = true;
-      close.current(false);
-    };
-    const focusIn = (e: FocusEvent) => {
+    const leave = (e: Event) => {
       if (!outside(e.target)) return;
       movedOn = true;
       close.current(false);
@@ -99,13 +90,12 @@ export function Popover({
       // Not when an open hover card above the panel took it.
       if (e.key === 'Escape' && !e.defaultPrevented) close.current(false);
     };
-    document.addEventListener('pointerdown', down);
-    document.addEventListener('focusin', focusIn);
-    document.addEventListener('keydown', key);
+    const ctl = new AbortController();
+    document.addEventListener('pointerdown', leave, { signal: ctl.signal });
+    document.addEventListener('focusin', leave, { signal: ctl.signal });
+    document.addEventListener('keydown', key, { signal: ctl.signal });
     return () => {
-      document.removeEventListener('pointerdown', down);
-      document.removeEventListener('focusin', focusIn);
-      document.removeEventListener('keydown', key);
+      ctl.abort();
       const active = document.activeElement;
       if (!movedOn && (!active || active === document.body)) anchor.current?.focus({ preventScroll: true });
     };
@@ -130,17 +120,15 @@ export function Popover({
   );
 }
 
-/**
- * Collapsed-by-default section built on <details>. Opens by itself when the page is
- * loaded with a #hash that points inside it (e.g. /guides#set-mechanics).
- */
+/** Collapsed <details> section that opens itself when the #hash points inside it (e.g. /guides#set-mechanics). */
 export function Expandable({ id, title, hint, children }: { id?: string; title: ReactNode; hint?: ReactNode; children: ReactNode }) {
   const ref = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const openForHash = () => {
       const el = ref.current;
       const hash = window.location.hash.slice(1);
-      const target = el && hash ? document.getElementById(decodeURIComponent(hash)) : null;
+      // A malformed hash (/guides#%) would otherwise throw and take the page down.
+      const target = el && hash ? document.getElementById(safeDecode(hash)) : null;
       if (el && target && (target === el || el.contains(target))) {
         el.open = true;
         requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
@@ -164,7 +152,6 @@ export function Expandable({ id, title, hint, children }: { id?: string; title: 
   );
 }
 
-/** Fade the edges of a sideways-scrolling row where there is more to see. */
 export function useEdgeFade(ref: RefObject<HTMLElement | null>, deps: unknown[] = []) {
   const [edge, setEdge] = useState({ left: false, right: false });
   useEffect(() => {
@@ -186,11 +173,10 @@ export function useEdgeFade(ref: RefObject<HTMLElement | null>, deps: unknown[] 
       box.removeEventListener('scroll', update);
       ro.disconnect();
     };
-  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+  }, deps);
   return edge;
 }
 
-/** A row that scrolls sideways when it does not fit (phones), fading the edge with more to see. */
 export function HScroll({ children, className }: { children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const edge = useEdgeFade(ref);
@@ -209,23 +195,22 @@ export function HScroll({ children, className }: { children: ReactNode; classNam
   );
 }
 
-/**
- * A banner picture that moves on to the next candidate when one fails to load (a missing file
- * would otherwise leave the banner bare). Also catches failures that happened before hydration.
- */
+/** A banner picture that falls back to the next source when one fails, including failures before hydration. */
 export function HeroArt({ sources, className }: { sources: string[]; className?: string }) {
-  const [i, setI] = useState(0);
-  const img = useRef<HTMLImageElement>(null);
   const key = sources.join('|');
-  useEffect(() => setI(0), [key]);
+  // Counted per list of sources, so another page's sources start at the first at once.
+  const [failed, setFailed] = useState({ key, n: 0 });
+  const i = failed.key === key ? failed.n : 0;
+  const skip = () => setFailed((f) => ({ key, n: (f.key === key ? f.n : 0) + 1 }));
+  const img = useRef<HTMLImageElement>(null);
   useEffect(() => {
     const el = img.current;
-    if (el && el.complete && el.naturalWidth === 0) setI((n) => n + 1);
+    if (el && el.complete && el.naturalWidth === 0) skip();
   }, [i, key]);
   const src = sources[i];
   if (!src) return null;
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img ref={img} key={src} {...bannerArt(src)} alt="" aria-hidden className={className} onError={() => setI((n) => n + 1)} />;
+  // Usually the page's largest picture, at its top: fetched first.
+  return <img ref={img} key={src} {...bannerArt(src)} alt="" aria-hidden fetchPriority="high" className={className} onError={skip} />;
 }
 
 export function RefreshButton() {

@@ -13,10 +13,7 @@ interface AppContext {
 const Ctx = createContext<AppContext>({ session: null, rsoEnabled: false });
 export const useApp = () => useContext(Ctx);
 
-/*
- * Descriptions (abilities, items, traits, augments) come from /api/static/<version>, fetched once
- * per version of the game data (a new version, after a refresh, loads again).
- */
+// Descriptions (abilities, items, traits, augments) from /api/static/<version>, fetched once per game data version.
 let textVersion = '';
 let text: StaticText | null = null;
 let textFor = '';
@@ -54,12 +51,7 @@ export function useStaticText(): StaticText | null {
   return value;
 }
 
-export function Providers({
-  staticData,
-  version,
-  children,
-  ...app
-}: AppContext & { staticData: StaticLite; version: string; children: ReactNode }) {
+export function Providers({ staticData, version, children, ...app }: AppContext & { staticData: StaticLite; version: string; children: ReactNode }) {
   // Set during render, so every client component below (on the server too) can look game data up.
   setPageStatic(staticData);
   textVersion = version;
@@ -68,7 +60,7 @@ export function Providers({
     const idle = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 1500));
     idle(loadStaticText);
   }, [version]);
-  const value = useMemo(() => app, [app.session, app.rsoEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  const value = useMemo(() => app, [app.session, app.rsoEnabled]);
   return (
     <Ctx.Provider value={value}>
       {children}

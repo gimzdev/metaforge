@@ -47,8 +47,7 @@ export function getPlatform(id: string | null | undefined): Platform | undefined
 }
 
 export function normalizePlatform(input: string | null | undefined): string | null {
-  if (!input) return null;
-  return aliases.get(input.trim().toLowerCase()) ?? null;
+  return input ? (aliases.get(input.trim().toLowerCase()) ?? null) : null;
 }
 
 export function platformLabel(id: string): string {
@@ -57,11 +56,7 @@ export function platformLabel(id: string): string {
 
 export function parseRegionList(raw: string): string[] {
   if (raw.trim().toLowerCase() === 'all') return PLATFORMS.map((p) => p.id);
-  const ids = raw
-    .split(/[\s,]+/)
-    .map((r) => normalizePlatform(r))
-    .filter((r): r is string => Boolean(r));
-  return [...new Set(ids)];
+  return [...new Set(raw.split(/[\s,]+/).map(normalizePlatform).filter((r): r is string => Boolean(r)))];
 }
 
 /** "EUW1_7412345678" → "euw1" */

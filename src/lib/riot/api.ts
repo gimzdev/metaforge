@@ -3,8 +3,6 @@ import { env } from '@/lib/env';
 import { sleep } from '@/lib/utils';
 import { getPlatform, normalizePlatform, type Platform } from './regions';
 
-/* ── DTOs (only the fields MetaForge reads) ─────────────── */
-
 export interface AccountDto {
   puuid: string;
   gameName?: string;
@@ -49,6 +47,7 @@ export interface MatchParticipantDto {
   riotIdGameName?: string;
   riotIdTagline?: string;
   partner_group_id?: number;
+  companion?: { content_ID?: string; species?: string; skin_ID?: number };
 }
 
 export interface MatchDto {
@@ -65,8 +64,6 @@ export interface MatchDto {
   };
 }
 
-/* ── Client ─────────────────────────────────────────────── */
-
 type RiotErrorCode = 'config' | 'key' | 'not_found' | 'rate' | 'server' | 'network' | 'budget' | 'bad_request';
 
 export class RiotError extends Error {
@@ -80,51 +77,67 @@ export class RiotError extends Error {
   }
 }
 
-/**
- * Sliding-window limiter per routing host (na1, americas, ...): Riot applies app rate
- * limits per routing value. Starts from RIOT_RATE_LIMITS and follows X-App-Rate-Limit.
- */
-/** Drop the requests that have left a window, in one pass (a production key keeps tens of thousands). */
+/** One splice, not a shift per hit: a production key keeps tens of thousands. */
 function expire(w: { ms: number; hits: number[] }, now: number) {
   let k = 0;
   while (k < w.hits.length && w.hits[k] <= now - w.ms) k++;
   if (k) w.hits.splice(0, k);
 }
 
+/** How long Riot's X-App-Rate-Limit-Count is trusted once nothing more is sent. */
+const REPORTED_MS = 10_000;
+
+/** Sliding-window limiter per routing host (Riot's app limits are per routing value); follows X-App-Rate-Limit. */
 class HostLimiter {
   private windows: Array<{ limit: number; ms: number; hits: number[] }>;
+  /** Riot's count per window length, including other servers' calls with the key. */
+  private reported = new Map<number, { count: number; at: number }>();
   private blockedUntil = 0;
   private signature: string;
 
   constructor(limits: Array<[number, number]>) {
-    this.windows = limits.map(([limit, ms]) => ({ limit, ms, hits: [] }));
+    // Configured limits get the adopted ones' 10% margin too: they usually equal Riot's header, which then is not re-adopted.
+    this.windows = HostLimiter.windowsFor(limits);
     this.signature = limits.map(([l, ms]) => `${l}:${ms / 1000}`).join(',');
   }
 
-  /** Adopt a "100:120,20:1" header, keeping a 10% safety margin. */
+  private static windowsFor(limits: Array<[number, number]>) {
+    return limits.map(([limit, ms]) => ({ limit: Math.max(1, Math.floor(limit * 0.9)), ms, hits: [] as number[] }));
+  }
+
+  /** Adopt a "100:120,20:1" header. */
   adopt(header: string | null) {
     if (!header || header === this.signature) return;
-    const parsed = header
-      .split(',')
-      .map((p) => p.split(':').map(Number))
-      .filter(([l, s]) => l > 0 && s > 0);
+    const parsed = header.split(',').map((p) => p.split(':').map(Number)).filter(([l, s]) => l > 0 && s > 0);
     if (!parsed.length) return;
     this.signature = header;
-    this.windows = parsed.map(([l, s]) => ({ limit: Math.max(1, Math.floor(l * 0.9)), ms: s * 1000, hits: [] }));
+    this.windows = HostLimiter.windowsFor(parsed.map(([l, s]) => [l, s * 1000]));
+  }
+
+  /** Note a "12:10,350:600" X-App-Rate-Limit-Count header. */
+  observe(header: string | null) {
+    if (!header) return;
+    const at = Date.now();
+    for (const part of header.split(',')) {
+      const [count, seconds] = part.split(':').map(Number);
+      if (count >= 0 && seconds > 0) this.reported.set(seconds * 1000, { count, at });
+    }
   }
 
   block(ms: number) {
     this.blockedUntil = Math.max(this.blockedUntil, Date.now() + ms);
   }
 
-  /** Share of the tightest window still free (1 when idle, 0 when nothing more can be sent now). */
+  /** Free share of the tightest window (0..1); Riot's recent count wins when higher, so background work yields to other servers. */
   headroom() {
     const now = Date.now();
     if (this.blockedUntil > now) return 0;
     let free = 1;
     for (const w of this.windows) {
       expire(w, now);
-      free = Math.min(free, 1 - w.hits.length / w.limit);
+      const seen = this.reported.get(w.ms);
+      const used = Math.max(w.hits.length, seen && now - seen.at < REPORTED_MS ? seen.count : 0);
+      free = Math.min(free, 1 - used / w.limit);
     }
     return Math.max(0, free);
   }
@@ -141,7 +154,8 @@ class HostLimiter {
         for (const w of this.windows) w.hits.push(now);
         return;
       }
-      if (now + wait > deadline) throw new RiotError('budget', 'Rate-limit wait would exceed the time budget');
+      // Shown to visitors.
+      if (now + wait > deadline) throw new RiotError('budget', 'The Riot API is busy right now. Try again in a moment.');
       await sleep(Math.min(wait, 5_000));
     }
   }
@@ -156,14 +170,14 @@ const state = () =>
 
 export const lastKeyErrorAt = () => state().lastKeyError || null;
 
-/** How much of a routing host's rate limit is free right now (0 to 1): background work backs off when it is low. */
+/** Free share (0..1) of a routing host's rate limit; background work backs off when it is low. */
 export const riotHeadroom = (host: string) => state().limiters.get(host)?.headroom() ?? 1;
 
 interface RiotGetOptions {
   /** Epoch ms after which the call gives up instead of waiting. */
   deadline?: number;
   retries?: number;
-  /** Riot Sign-On access token (instead of the API key). */
+  /** RSO access token (instead of the API key). */
   token?: string;
 }
 
@@ -190,8 +204,16 @@ export async function riotGet<T>(host: string, path: string, opts: RiotGetOption
         res = await fetch(url, {
           headers: opts.token ? { Authorization: `Bearer ${opts.token}` } : { 'X-Riot-Token': key },
           cache: 'no-store',
-          signal: AbortSignal.timeout(15_000),
+          // Not past the caller's deadline (with a little room for a call made just before it).
+          signal: AbortSignal.timeout(Math.max(2_000, Math.min(15_000, deadline - Date.now()))),
         });
+        if (!opts.token) {
+          // Only API-key calls describe the key's limits.
+          limiter.adopt(res.headers.get('x-app-rate-limit'));
+          limiter.observe(res.headers.get('x-app-rate-limit-count'));
+        }
+        // A truncated or timed-out body lands in the catch as a network failure.
+        if (res.ok) return (await res.json()) as T;
       } catch (error) {
         if (backoff(attempt)) {
           await sleep(1_000 * 2 ** attempt);
@@ -199,17 +221,13 @@ export async function riotGet<T>(host: string, path: string, opts: RiotGetOption
         }
         throw new RiotError('network', `Could not reach Riot API (${(error as Error).message})`);
       }
-      limiter.adopt(res.headers.get('x-app-rate-limit'));
-      if (res.ok) return (await res.json()) as T;
+      // Error bodies are never read: release the connection.
+      void res.body?.cancel().catch(() => undefined);
       if (res.status === 404) throw new RiotError('not_found', 'Not found', 404);
       if (res.status === 400) throw new RiotError('bad_request', 'Bad request', 400);
       if (res.status === 401 || res.status === 403) {
         if (!opts.token) s.lastKeyError = Date.now();
-        throw new RiotError(
-          'key',
-          opts.token ? 'Riot rejected the sign-in token' : 'Riot rejected the API key — development keys expire after 24 hours',
-          res.status,
-        );
+        throw new RiotError('key', opts.token ? 'Riot rejected the sign-in token' : 'Riot rejected the API key', res.status);
       }
       if (res.status === 429) {
         const retryAfter = Number(res.headers.get('retry-after'));
@@ -234,12 +252,12 @@ export async function riotGet<T>(host: string, path: string, opts: RiotGetOption
   return promise;
 }
 
-/* ── Endpoints (cached) ─────────────────────────────────── */
-
 const MIN = 60_000;
 const caches = () =>
   singleton('riot-caches', () => ({
     account: new TtlCache<AccountDto>(2000, 60 * MIN),
+    /** Riot IDs Riot said "not found" for, re-asked after a while (they may be created or renamed). */
+    noAccount: new TtlCache<true>(5000, 10 * MIN),
     region: new TtlCache<string>(2000, 6 * 60 * MIN),
     summoner: new TtlCache<{ profileIconId: number; summonerLevel: number }>(2000, 30 * MIN),
     league: new TtlCache<LeagueEntryDto[]>(2000, 2 * MIN),
@@ -250,15 +268,19 @@ const caches = () =>
 
 const inflight = new WeakMap<object, Map<string, Promise<unknown>>>();
 
-/** Cached lookups; callers asking for the same thing while it is being fetched share that one request. */
+/** Cached lookups; concurrent callers share one request. */
 async function cached<T>(cache: TtlCache<T>, key: string, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
   let running = inflight.get(cache);
   if (!running) inflight.set(cache, (running = new Map()));
   const shared = running.get(key) as Promise<T> | undefined;
-  // If the first caller failed (say it ran out of its own time limit), try again on our own.
-  if (shared) return shared.catch(() => load().then((value) => (cache.set(key, value), value)));
+  // If the first caller failed (e.g. its own deadline), retry on our own, except for Riot's definite answers.
+  if (shared)
+    return shared.catch((error) => {
+      if (error instanceof RiotError && (error.code === 'not_found' || error.code === 'bad_request')) throw error;
+      return load().then((value) => (cache.set(key, value), value));
+    });
   const pending = load()
     .then((value) => (cache.set(key, value), value))
     .finally(() => running.delete(key));
@@ -274,13 +296,26 @@ function platformOrThrow(id: string): Platform {
 
 const enc = encodeURIComponent;
 
-export const getAccountByRiotId = (gameName: string, tagLine: string, opts?: RiotGetOptions) =>
-  cached(caches().account, `${gameName}#${tagLine}`.toLowerCase(), () =>
-    riotGet<AccountDto>('americas', `/riot/account/v1/accounts/by-riot-id/${enc(gameName)}/${enc(tagLine)}`, opts),
-  );
+export async function getAccountByRiotId(gameName: string, tagLine: string, opts?: RiotGetOptions) {
+  const key = `${gameName}#${tagLine}`.toLowerCase();
+  // A made-up Riot ID costs one call, not one per visit.
+  if (caches().noAccount.get(key)) throw new RiotError('not_found', 'Not found', 404);
+  try {
+    return await cached(caches().account, key, () =>
+      riotGet<AccountDto>('americas', `/riot/account/v1/accounts/by-riot-id/${enc(gameName)}/${enc(tagLine)}`, opts),
+    );
+  } catch (error) {
+    if (error instanceof RiotError && error.code === 'not_found') caches().noAccount.set(key, true);
+    throw error;
+  }
+}
+
+/** Uncached: bulk directory lookups would only push useful entries out. */
+export const fetchAccountByPuuid = (puuid: string, routing = 'americas', opts?: RiotGetOptions) =>
+  riotGet<AccountDto>(routing, `/riot/account/v1/accounts/by-puuid/${enc(puuid)}`, opts);
 
 export const getAccountByPuuid = (puuid: string, routing = 'americas', opts?: RiotGetOptions) =>
-  cached(caches().account, puuid, () => riotGet<AccountDto>(routing, `/riot/account/v1/accounts/by-puuid/${enc(puuid)}`, opts));
+  cached(caches().account, puuid, () => fetchAccountByPuuid(puuid, routing, opts));
 
 /** The platform where a player is active for TFT (e.g. "na1"), or null. */
 export async function getActivePlatform(puuid: string, opts?: RiotGetOptions): Promise<string | null> {
@@ -316,12 +351,13 @@ export async function getLadder(platform: string, tier: LadderTier, opts?: RiotG
   return cached(caches().ladder, `${p.id}:${tier}`, () => riotGet<LeagueListDto>(p.id, `/tft/league/v1/${tier}?queue=RANKED_TFT`, opts));
 }
 
-export async function getMatchIds(
-  platform: string,
-  puuid: string,
-  params: { count?: number; start?: number; startTime?: number } = {},
-  opts?: RiotGetOptions,
-) {
+/** One page (about 200 players) of a ranked division, below Master. */
+export async function getDivisionPage(platform: string, tier: string, division: string, page: number, opts?: RiotGetOptions) {
+  const p = platformOrThrow(platform);
+  return riotGet<Array<LeagueEntryDto & { puuid?: string }>>(p.id, `/tft/league/v1/entries/${enc(tier)}/${enc(division)}?queue=RANKED_TFT&page=${page}`, opts);
+}
+
+export async function getMatchIds(platform: string, puuid: string, params: { count?: number; start?: number; startTime?: number } = {}, opts?: RiotGetOptions) {
   const p = platformOrThrow(platform);
   const q = new URLSearchParams({ count: String(Math.min(200, Math.max(1, params.count ?? 20))) });
   if (params.start) q.set('start', String(params.start));
@@ -331,8 +367,43 @@ export async function getMatchIds(
   );
 }
 
+const list = <T>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value.filter((v) => v && typeof v === 'object') : []);
+
+/** Keep only MatchDto's fields: Riot's full match is several times larger and thousands stay cached. */
+function slimMatch(m: MatchDto): MatchDto {
+  if (!m?.metadata || !m.info) return m;
+  const i = m.info;
+  return {
+    metadata: { match_id: m.metadata.match_id },
+    info: {
+      game_datetime: i.game_datetime,
+      game_length: i.game_length,
+      game_version: i.game_version,
+      queue_id: i.queue_id,
+      queueId: i.queueId,
+      tft_game_type: i.tft_game_type,
+      tft_set_number: i.tft_set_number,
+      participants: list(i.participants).map((p) => ({
+        puuid: p.puuid,
+        placement: p.placement,
+        level: p.level,
+        gold_left: p.gold_left,
+        last_round: p.last_round,
+        total_damage_to_players: p.total_damage_to_players ?? (p as unknown as Record<string, number | undefined>).totalDamageToPlayers,
+        traits: list(p.traits).map((t) => ({ name: t.name, num_units: t.num_units, style: t.style, tier_current: t.tier_current })),
+        units: list(p.units).map((u) => ({ character_id: u.character_id, itemNames: u.itemNames, tier: u.tier })),
+        augments: p.augments,
+        riotIdGameName: p.riotIdGameName,
+        riotIdTagline: p.riotIdTagline,
+        partner_group_id: p.partner_group_id,
+        companion: p.companion ? { content_ID: p.companion.content_ID, species: p.companion.species, skin_ID: p.companion.skin_ID } : undefined,
+      })),
+    },
+  };
+}
+
 export async function getMatch(matchId: string, opts?: RiotGetOptions) {
   const routing = getPlatform(normalizePlatform(matchId.split('_')[0]) ?? '')?.match;
   if (!routing) throw new RiotError('bad_request', `Cannot route match ${matchId}`);
-  return cached(caches().match, matchId, () => riotGet<MatchDto>(routing, `/tft/match/v1/matches/${enc(matchId)}`, opts));
+  return cached(caches().match, matchId, () => riotGet<MatchDto>(routing, `/tft/match/v1/matches/${enc(matchId)}`, opts).then(slimMatch));
 }

@@ -50,7 +50,7 @@ export default async function StatusPage() {
             hint={s.lastMatchAt ? `Newest game played ${fmt.ago(s.lastMatchAt)}.` : 'No ranked games stored yet.'}
           />
           <Row
-            tone={!s.riotKey ? 'warn' : keyRejected ? 'warn' : 'ok'}
+            tone={!s.riotKey || keyRejected ? 'warn' : 'ok'}
             label="Riot API key"
             value={!s.riotKey ? 'Missing' : keyRejected ? 'Rejected' : 'Configured'}
             hint={
@@ -62,7 +62,7 @@ export default async function StatusPage() {
             }
           />
           <Row
-            tone={s.collecting ? 'ok' : s.schedulerActive ? 'ok' : env.onVercel ? 'ok' : 'off'}
+            tone={s.collecting || s.schedulerActive || env.onVercel ? 'ok' : 'off'}
             label="Schedule"
             value={
               s.collecting
@@ -81,12 +81,7 @@ export default async function StatusPage() {
                 : `Runs every ${env.ingestIntervalMinutes} minutes while the server is up (INGEST_INTERVAL_MINUTES). Regions: ${env.ingestRegions}.`
             }
           />
-          <Row
-            tone={s.store.includes('—') ? 'warn' : 'ok'}
-            label="Storage"
-            value={s.database ? 'Postgres' : 'Local files'}
-            hint={s.store}
-          />
+          <Row tone={s.store.includes('—') ? 'warn' : 'ok'} label="Storage" value={s.database ? 'Postgres' : 'Local files'} hint={s.store} />
           <Row
             tone={s.staticData.error ? 'warn' : s.staticData.source ? 'ok' : 'off'}
             label="Game data"
@@ -103,7 +98,7 @@ export default async function StatusPage() {
 
         <Panel title="Last collection run" flush={Boolean(s.lastReport)}>
           {s.lastReport ? (
-            <div>
+            <>
               <div className="flex flex-wrap items-center justify-between gap-2 border-b hairline px-5 py-3 text-sm">
                 <span className={s.lastReport.ok ? 'text-wisp' : 'text-bloom'}>{s.lastReport.ok ? 'Completed' : 'Finished with problems'}</span>
                 <span className="text-lichen">
@@ -134,11 +129,9 @@ export default async function StatusPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </>
           ) : (
-            <p className="text-sm text-lichen">
-              {s.riotKey ? 'The first run starts a few seconds after the server boots.' : 'Collection starts once a Riot API key is configured.'}
-            </p>
+            <p className="text-sm text-lichen">{s.riotKey ? 'The first run starts a few seconds after the server boots.' : 'Collection starts once a Riot API key is configured.'}</p>
           )}
         </Panel>
       </div>

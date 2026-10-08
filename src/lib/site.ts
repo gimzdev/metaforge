@@ -1,14 +1,6 @@
 import { BookOpen, Hexagon, ListOrdered, ScrollText, SlidersHorizontal, Trophy } from '@/components/icons';
 
-/**
- * Artwork from public/assets/app, detected at build time in next.config.ts.
- * Empty strings mean "use the built-in look".
- *
- *   app.png           logo and favicon
- *   bg.jpg            page background and home hero
- *   fight_banner.jpg  call-to-action and ladder banners
- *   learn_banner.jpg  guides and profile banners
- */
+/** Artwork from public/assets/app (app, bg, fight_banner, learn_banner), detected in next.config.ts; '' means the built-in look. */
 export const brand = {
   logo: process.env.MF_BRAND_LOGO || '',
   background: process.env.MF_BRAND_BG || '',
