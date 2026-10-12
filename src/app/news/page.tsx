@@ -264,7 +264,9 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
 
   const note = selectedNote(sp);
   const counts = tally(note);
-  const nextEvent = ESPORTS.find((e) => e.ends >= today);
+  const stateOf = (e: (typeof ESPORTS)[number]) =>
+    e.tba || !e.starts || !e.ends ? 'tba' : e.ends < today ? 'done' : e.starts <= today ? 'live' : 'upcoming';
+  const nextEvent = ESPORTS.find((e) => !e.estimated && stateOf(e) === 'upcoming');
 
   return (
     <div className="space-y-10">
@@ -340,7 +342,7 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
           <div>
             <h2 className="text-[1.6rem] leading-tight text-moon">Competitive season</h2>
             <p className="mt-1.5 text-sm text-lichen">
-              The {info.name} circuit, from the cups to the Tactician&apos;s Crown.
+              The {info.name} circuit from the cups to the Tactician&apos;s Crown, then the Set 19 launch and the Vegas Open.
               {nextEvent ? ` Next up: ${nextEvent.name}, ${nextEvent.dates}.` : ''}
             </p>
           </div>
@@ -350,19 +352,35 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
         </div>
         <ol className="surface divide-y divide-line overflow-hidden rounded-xl">
           {ESPORTS.map((e) => {
-            const done = e.ends < today;
+            const state = stateOf(e);
             const next = e === nextEvent;
+            const current = state === 'live' || next;
+            const tone = {
+              done: { row: 'opacity-50', tag: 'text-fog', name: 'text-lichen', dates: 'text-fog', detail: 'text-fog' },
+              live: { row: 'bg-white/[0.035]', tag: 'text-moon', name: 'text-moon', dates: 'text-moon', detail: 'text-lichen' },
+              upcoming: { row: next ? 'bg-white/[0.035]' : '', tag: next ? 'text-moon' : 'text-fog', name: 'text-moon', dates: 'text-moon', detail: 'text-lichen' },
+              tba: { row: '', tag: 'text-fog', name: 'text-lichen', dates: 'italic text-fog', detail: 'text-fog' },
+            }[state];
+            const tag = state === 'done' ? 'Done' : state === 'live' ? (e.estimated ? 'Open' : 'Live now') : state === 'tba' ? 'TBA' : next ? 'Next' : e.estimated ? 'Expected' : 'Upcoming';
             return (
               <li
                 key={e.name}
-                className={cn('grid gap-x-6 gap-y-1 px-4 py-3.5 sm:px-5 md:grid-cols-[5.5rem_minmax(0,15rem)_9rem_minmax(0,1fr)] md:items-baseline', next && 'bg-wisp/[0.05]')}
+                aria-current={current ? 'step' : undefined}
+                className={cn('grid gap-x-6 gap-y-1 px-4 py-3.5 sm:px-5 md:grid-cols-[5.5rem_minmax(0,15rem)_10rem_minmax(0,1fr)] md:items-baseline', tone.row)}
               >
-                <span className={cn('text-[11px] font-semibold uppercase tracking-[0.12em]', done ? 'text-fog' : next ? 'text-wisp' : 'text-lichen')}>
-                  {done ? 'Done' : next ? 'Next' : 'Upcoming'}
+                <span className={cn('flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em]', tone.tag)}>
+                  <span
+                    aria-hidden
+                    className={cn('size-1.5 rounded-full', current ? 'bg-moon' : state === 'done' ? 'bg-fog/60' : 'border border-fog/70')}
+                  />
+                  {tag}
                 </span>
-                <span className={cn('font-medium', done ? 'text-lichen' : 'text-moon')}>{e.name}</span>
-                <span className="num text-sm text-lichen">{e.dates}</span>
-                <span className={cn('text-sm leading-relaxed', done ? 'text-fog/80' : 'text-fog')}>{e.detail}</span>
+                <span className={cn('font-medium', state === 'done' && 'line-through decoration-fog/40', tone.name)}>
+                  {e.name}
+                  {e.tag && <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-[0.14em] text-fog">{e.tag}</span>}
+                </span>
+                <span className={cn('num text-sm', tone.dates)}>{e.dates}</span>
+                <span className={cn('text-sm leading-relaxed', tone.detail)}>{e.detail}</span>
               </li>
             );
           })}

@@ -512,7 +512,21 @@ export function SiteHeader() {
   return (
     <header className="z-40 border-b border-line bg-night/[0.97] md:sticky md:top-0">
       <div className="mx-auto flex h-16 max-w-[1400px] items-center gap-6 px-4 sm:px-6">
-        <Link href="/" className="shrink-0 rounded-md" aria-label="MetaForge home">
+        <Link
+          href="/"
+          className="shrink-0 rounded-md"
+          aria-label="MetaForge home"
+          onClick={(e) => {
+            // Already on the home page: Next.js would not move, so scroll up ourselves. From any other page,
+            // make sure the new page opens at the top even when the sticky header was in view.
+            if (pathname === '/' && !window.location.search) {
+              e.preventDefault();
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else {
+              window.setTimeout(() => window.scrollTo(0, 0), 60);
+            }
+          }}
+        >
           <Wordmark />
         </Link>
         <div className="hidden min-w-0 flex-1 justify-center md:flex">

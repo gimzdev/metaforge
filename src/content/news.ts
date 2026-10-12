@@ -690,19 +690,31 @@ export const SET_OVERVIEW = {
 interface EsportsEvent {
   name: string;
   dates: string;
-  /** Last day of the event (UTC), to mark finished events */
-  ends: string;
+  /** First day of the event (UTC), to mark the one that is live */
+  starts?: string;
+  /** Last day of the event (UTC), to mark finished events. Leave out while the dates are not announced. */
+  ends?: string;
+  /** True while Riot has not announced the dates; such events are listed last and never count as next or done. */
+  tba?: boolean;
+  /** True when the date is an estimate (Riot has not announced it). Estimated entries never count as "next". */
+  estimated?: boolean;
+  /** Small label above the name: the circuit entries have none, Set 19 milestones say "Set 19". */
+  tag?: string;
   detail: string;
 }
 
 export const ESPORTS: EsportsEvent[] = [
-  { name: 'Riftbeast Cup', dates: 'Sep 4–6', ends: '2026-09-06', detail: 'TFT Pro Circuit cup in every region, $30,200 per region.' },
-  { name: 'Elderwood Cup', dates: 'Sep 18–20', ends: '2026-09-20', detail: 'Pro Circuit cup with paired regions facing off, $30,200 per region.' },
-  { name: 'Tactician’s Trials 1', dates: 'Sep 19–20, 25–27', ends: '2026-09-27', detail: 'Open qualifier in Americas, EMEA and APAC starting from 256 players, $12,500 per event.' },
-  { name: 'Blossom Cup', dates: 'Oct 2–4', ends: '2026-10-04', detail: 'Final Pro Circuit cup of the set, $30,200 per region.' },
-  { name: 'Tactician’s Trials 2', dates: 'Oct 10–11, 16–18', ends: '2026-10-18', detail: 'Second open qualifier, $12,500 per event.' },
-  { name: 'Tactician’s Superbrawl', dates: 'Nov 6–8', ends: '2026-11-08', detail: '4v4 team tournament; qualification snapshot on November 2.' },
-  { name: 'Regional Finals and Tactician’s Crown', dates: 'After the cups', ends: '2026-12-31', detail: '64 players per regional final ($50,000 each), then 40 players worldwide compete for $470,000 at the Crown.' },
+  { name: 'Riftbeast Cup', dates: 'Sep 4–6', starts: '2026-09-04', ends: '2026-09-06', detail: 'TFT Pro Circuit cup in every region, $30,200 per region.' },
+  { name: 'Elderwood Cup', dates: 'Sep 18–20', starts: '2026-09-18', ends: '2026-09-20', detail: 'Pro Circuit cup with paired regions facing off, $30,200 per region.' },
+  { name: 'Tactician’s Trials 1', dates: 'Sep 19–20, 25–27', starts: '2026-09-19', ends: '2026-09-27', detail: 'Open qualifier in Americas, EMEA and APAC starting from 256 players, $12,500 per event.' },
+  { name: 'Blossom Cup', dates: 'Oct 2–4', starts: '2026-10-02', ends: '2026-10-04', detail: 'Final Pro Circuit cup of the set, $30,200 per region.' },
+  { name: 'Tactician’s Trials 2', dates: 'Oct 10–11, 16–18', starts: '2026-10-10', ends: '2026-10-18', detail: 'Second open qualifier, $12,500 per event.' },
+  { name: 'Regional Finals', dates: 'Oct 23 – Nov 1', starts: '2026-10-23', ends: '2026-11-01', detail: '64 players in each of Americas, EMEA and APAC over six days across two weeks, $50,000 per region.' },
+  { name: 'Set 19 PBE', tag: 'Set 19', dates: 'Early Nov (est.)', starts: '2026-11-04', ends: '2026-11-30', estimated: true, detail: 'Riot has not announced the PBE date. Set 18’s test server opened four weeks before launch, which points to early November.' },
+  { name: 'Tactician’s Superbrawl', dates: 'Nov 6–8', starts: '2026-11-06', ends: '2026-11-08', detail: '4v4 team tournament; qualification snapshot on November 2.' },
+  { name: 'Tactician’s Crown', dates: 'Nov 13–15', starts: '2026-11-13', ends: '2026-11-15', detail: '40 players worldwide over three days for $470,000. The world championship of Set 18.' },
+  { name: 'Set 19 live', tag: 'Set 19', dates: 'Dec 1', starts: '2026-12-01', ends: '2026-12-01', detail: 'Patch 19.1 opens the next set on all servers, per Riot’s patch schedule (Pacific time).' },
+  { name: 'TFT Vegas Open', tag: 'Set 19', dates: 'Dec 11–13', starts: '2026-12-11', ends: '2026-12-13', detail: 'In-person event in Las Vegas at Convergence Fest, played on Set 19. $311,300 for the top 128, $100,000 to the champion.' },
 ];
 
 export const ESPORTS_SOURCE = {
@@ -715,4 +727,6 @@ export const OFFICIAL_LINKS = [
   { label: 'Set 18 overview', url: SET_OVERVIEW.source.url },
   { label: 'Unreal Engine migration FAQ', url: 'https://teamfighttactics.leagueoflegends.com/en-us/news/game-updates/faq-tft-unreal-migration/' },
   { label: 'Esports calendar', url: ESPORTS_SOURCE.url },
+  { label: 'Patch schedule', url: 'https://support.riotgames.com/tft/events/patch-schedule-teamfight-tactics' },
+  { label: 'Vegas Open info', url: 'https://teamfighttactics.leagueoflegends.com/en-us/news/esports/tft-vegas-open-2026-competitor-info/' },
 ];
