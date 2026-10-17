@@ -1,16 +1,16 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { gunzipSync, gzipSync } from 'node:zlib';
 import { configuredSetNumber } from '@/config/game';
 import { singleton } from '@/lib/cache';
 import { env } from '@/lib/env';
-import { getStore } from '@/lib/store';
+import { shared } from '@/lib/shared-cache';
 import { normalizeCdragon, type RawCdragon } from './normalize';
 import type { StaticData, StaticLite, StaticText } from './types';
 
-// Game data for the current set from CommunityDragon, cached in memory, on disk and (with Postgres) in the database, so a
-// new serverless instance reads a small saved copy instead of CommunityDragon's whole file. Stale copies serve while it's down.
+// Game data for the current set from CommunityDragon, cached in memory, on disk and in Next's shared data cache (Vercel's
+// on Vercel), so a new serverless instance reads a small saved copy instead of CommunityDragon's whole file, and never
+// wakes the database for it (every page's layout asks for this). Stale copies serve while CommunityDragon is down.
 const FRESH_MS = 6 * 60 * 60 * 1000;
 const CACHE_VERSION = 5;
 
@@ -26,7 +26,6 @@ const slot = () => singleton<Slot>('static-data', () => ({ data: null, loadedAt:
 
 const cacheName = () => `static-v${CACHE_VERSION}-set${configuredSetNumber()}`;
 const cacheFile = () => path.join(env.dataDir, 'cache', `${cacheName()}.json`);
-const shared = () => (getStore().kind === 'postgres' ? getStore() : null);
 
 type Saved = { data: StaticData; savedAt: number };
 
@@ -48,16 +47,28 @@ async function writeDisk(text: string) {
   }
 }
 
+// One CommunityDragon download per FRESH_MS for all servers; the name keys the set and the cache layout.
+const sharedCopy = shared(async (_name: string): Promise<Saved> => ({ savedAt: Date.now(), data: await fetchFresh() }), ['static-data'], {
+  tags: ['mf-static'],
+  revalidate: FRESH_MS / 1000,
+});
+
+/** Set when reading the shared copy meant downloading it and that failed, so load() doesn't try CommunityDragon twice. */
+let sharedError: unknown = null;
+
 async function readShared(): Promise<Saved | null> {
+  sharedError = null;
+  if (env.staticDataFile) return null;
   try {
-    const blob = await shared()?.getBlob(cacheName());
-    return blob ? parseSaved(gunzipSync(blob).toString('utf8')) : null;
-  } catch {
+    const saved = await sharedCopy(cacheName());
+    return saved?.data?.champions?.length ? { data: { ...saved.data, source: 'cache' }, savedAt: saved.savedAt } : null;
+  } catch (error) {
+    sharedError = error;
     return null;
   }
 }
 
-/** The newest saved copy: this server's disk, or the database when that is newer (a fresh serverless instance). */
+/** The newest saved copy: this server's disk, or the shared copy when that is newer (a fresh serverless instance). */
 async function readSaved(): Promise<Saved | null> {
   const disk = await fs.readFile(cacheFile(), 'utf8').then(parseSaved, () => null);
   if (disk && Date.now() - disk.savedAt < FRESH_MS) return disk;
@@ -70,9 +81,7 @@ async function readSaved(): Promise<Saved | null> {
 }
 
 async function writeSaved(data: StaticData) {
-  const text = JSON.stringify({ savedAt: Date.now(), data });
-  await writeDisk(text);
-  await shared()?.setBlob(cacheName(), gzipSync(text)).catch(() => undefined);
+  await writeDisk(JSON.stringify({ savedAt: Date.now(), data }));
 }
 
 async function fetchFresh(): Promise<StaticData> {
@@ -115,6 +124,7 @@ async function load(s: Slot): Promise<StaticData> {
         return saved.data;
       }
     }
+    if (readCopy && sharedError) throw sharedError;
     const fresh = await fetchFresh();
     // Game data changes once a patch: an identical copy keeps the current object, so the stats dataset
     // and every cached result built on it stay valid instead of being rebuilt every six hours.

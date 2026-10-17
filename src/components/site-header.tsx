@@ -440,7 +440,8 @@ function DataStatus() {
         .catch(() => undefined);
     };
     load();
-    const timer = window.setInterval(() => document.visibilityState === 'visible' && load(), 60_000);
+    // Every 5 minutes: the line only changes when a collection run finishes (every 3 hours).
+    const timer = window.setInterval(() => document.visibilityState === 'visible' && load(), 5 * 60_000);
     wide.addEventListener('change', load);
     return () => {
       alive = false;

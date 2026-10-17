@@ -58,7 +58,9 @@ export interface Dataset {
 }
 
 export const NO_PATCH = 255;
-const CHECK_MS = 60_000; // how often to ask the store whether new matches arrived
+// How often a warm server asks the store whether new matches arrived. Pages read their results from the shared cache
+// (lib/shared-cache.ts), and the stats service asks for a recent check when it computes one, so this default rarely applies.
+const CHECK_MS = 30 * 60_000;
 
 const gen = () => singleton('dataset-gen', () => ({ n: 1 }));
 
@@ -76,10 +78,14 @@ interface Holder {
 const holder = () =>
   singleton<Holder>('dataset-holder', () => ({ ds: null, columns: null, builtFrom: null, token: '', gen: 0, windows: '', checkedAt: 0, refreshing: null }));
 
-/** The current dataset: the loaded copy at once, refreshed in the background when the store has new matches or a patch starts. */
-export function getDataset(): Promise<Dataset> {
+/**
+ * The current dataset: the loaded copy at once, refreshed in the background when the store has new matches or a patch starts.
+ * `maxAgeMs`: how recently the store must have been asked about new matches for the loaded copy to count as current.
+ * `wait`: when it doesn't, wait for the refresh instead of answering with the loaded copy (results that get shared).
+ */
+export function getDataset(maxAgeMs = CHECK_MS, wait = false): Promise<Dataset> {
   const h = holder();
-  if (h.ds && h.gen === gen().n && Date.now() - h.checkedAt < CHECK_MS) return Promise.resolve(h.ds);
+  if (h.ds && h.gen === gen().n && Date.now() - h.checkedAt < maxAgeMs) return Promise.resolve(h.ds);
   h.refreshing ??= refresh(h)
     .catch((error) => {
       console.error('[metaforge] dataset refresh failed:', error instanceof Error ? error.message : error);
@@ -92,7 +98,7 @@ export function getDataset(): Promise<Dataset> {
     .finally(() => {
       h.refreshing = null;
     });
-  return h.ds ? Promise.resolve(h.ds) : h.refreshing;
+  return h.ds && !wait ? Promise.resolve(h.ds) : h.refreshing;
 }
 
 async function refresh(h: Holder): Promise<Dataset> {

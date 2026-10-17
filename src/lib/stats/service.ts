@@ -1,4 +1,6 @@
+import { configuredSetNumber } from '@/config/game';
 import { TtlCache, singleton } from '@/lib/cache';
+import { shared, STATS_TAG } from '@/lib/shared-cache';
 import { getDataset, type Dataset } from './dataset';
 import {
   aggregate,
@@ -23,6 +25,17 @@ import { gradeComps, gradeRows, highlights, itemMinSample, minSample, topUnits, 
 import type { ExplorerResult, Filter, Scope, StatRow, Summary, TieredComp, TieredRow, TopUnit } from './types';
 
 // Cached, page-ready stats built on the engine.
+//
+// Every exported result is shared by all server instances (lib/shared-cache.ts): a page view reads it from the cache and
+// never touches Postgres. Collection runs mark them stale (revalidateTag in /api/cron/ingest) and the next view rebuilds
+// them in the background. A rebuild first asks the store for new matches (FRESH_MS), so it never re-shares old numbers.
+const FRESH_MS = 10_000;
+/** Fallback age of a shared result, in seconds; collection runs refresh them sooner. */
+const SHARED_FOR = 6 * 3600;
+const hasReadError = (r: unknown) => Boolean(r && typeof r === 'object' && (r as { meta?: { error?: string | null } }).meta?.error);
+const share = <A extends unknown[], R>(name: string, fn: (...args: A) => Promise<R>) =>
+  shared(fn, ['stats', name, `set${configuredSetNumber()}`], { tags: [STATS_TAG], revalidate: SHARED_FOR, keep: (r) => !hasReadError(r) });
+
 const results = () => singleton('stats-results', () => new TtlCache<unknown>(150, 5 * 60_000));
 
 function memo<T>(ds: Dataset, key: string, build: () => T): T {
@@ -35,7 +48,7 @@ function memo<T>(ds: Dataset, key: string, build: () => T): T {
 }
 
 async function scoped(scopeInput: Partial<Scope>) {
-  const ds = await getDataset();
+  const ds = await getDataset(FRESH_MS, true);
   return { ds, ...resolveScope(ds, scopeInput) };
 }
 
@@ -45,7 +58,7 @@ function compsWith(ds: Dataset, boards: Int32Array, filter: Filter) {
   return gradeComps(aggregateComps(ds, picked, { minN: Math.max(5, Math.round(picked.length * 0.01)), limit: 8 }), 8);
 }
 
-export async function explore(scopeInput: Partial<Scope>, filters: Filter[]): Promise<ExplorerResult> {
+async function exploreNow(scopeInput: Partial<Scope>, filters: Filter[]): Promise<ExplorerResult> {
   const { ds, scope, idx } = await scoped(scopeInput);
   return memo(ds, `explore:${scope.region}|${scope.patch}|${filterSignature(filters)}`, () => {
     const base = scopeBoards(ds, idx);
@@ -83,7 +96,7 @@ export interface MetaResult {
   previousPatch: string | null;
 }
 
-export async function getMeta(scopeInput: Partial<Scope> = {}): Promise<MetaResult> {
+async function getMetaNow(scopeInput: Partial<Scope> = {}): Promise<MetaResult> {
   const { ds, scope, idx } = await scoped(scopeInput);
   return memo(ds, `meta:${scope.region}|${scope.patch}`, () => {
     const boards = scopeBoards(ds, idx);
@@ -157,7 +170,7 @@ export function metaViewData({ topUnits: _topUnits, summary: _summary, units, it
   };
 }
 
-export async function getUnitStats(key: string, scopeInput: Partial<Scope> = {}) {
+async function getUnitStatsNow(key: string, scopeInput: Partial<Scope> = {}) {
   const { ds, scope, idx } = await scoped(scopeInput);
   return memo(ds, `unit:${key}|${scope.region}|${scope.patch}`, () => {
     const boards = scopeBoards(ds, idx);
@@ -165,7 +178,7 @@ export async function getUnitStats(key: string, scopeInput: Partial<Scope> = {})
   });
 }
 
-export async function getItemStats(key: string, scopeInput: Partial<Scope> = {}) {
+async function getItemStatsNow(key: string, scopeInput: Partial<Scope> = {}) {
   const { ds, scope, idx } = await scoped(scopeInput);
   return memo(ds, `item:${key}|${scope.region}|${scope.patch}`, () => {
     const boards = scopeBoards(ds, idx);
@@ -173,7 +186,7 @@ export async function getItemStats(key: string, scopeInput: Partial<Scope> = {})
   });
 }
 
-export async function getTraitStats(key: string, scopeInput: Partial<Scope> = {}) {
+async function getTraitStatsNow(key: string, scopeInput: Partial<Scope> = {}) {
   const { ds, scope, idx } = await scoped(scopeInput);
   return memo(ds, `trait:${key}|${scope.region}|${scope.patch}`, () => {
     const boards = scopeBoards(ds, idx);
@@ -185,8 +198,8 @@ export async function getTraitStats(key: string, scopeInput: Partial<Scope> = {}
  * Comp ids are built from the boards and are regrouped on every data refresh, so an old link, a bookmark or another server instance
  * can name a comp that is now called something else. Finds the closest current comp (same carry and trait words) to send the visitor to.
  */
-export async function resolveCompId(id: string): Promise<string | null> {
-  const ds = await getDataset();
+async function resolveCompIdNow(id: string): Promise<string | null> {
+  const ds = await getDataset(FRESH_MS, true);
   if (ds.clusters.some((c) => c.id === id)) return id;
   const base = id.replace(/-\d+$/, '');
   const same = ds.clusters.find((c) => c.id === base || c.id.replace(/-\d+$/, '') === base);
@@ -207,7 +220,7 @@ export async function resolveCompId(id: string): Promise<string | null> {
   return bestScore >= 0.34 ? best : null;
 }
 
-export async function getComp(id: string, scopeInput: Partial<Scope> = {}) {
+async function getCompNow(id: string, scopeInput: Partial<Scope> = {}) {
   const { ds, scope, idx } = await scoped(scopeInput);
   const c = clusterIndex(ds, id);
   if (c < 0) return null;
@@ -238,6 +251,14 @@ export async function getComp(id: string, scopeInput: Partial<Scope> = {}) {
     return { scope: scopeAll ? { region: 'all', patch: 'all' } : widened ? { ...scope, patch: 'all' } : scope, meta: ds.meta, comp: graded, carry: carryKey, carryBuilds: carryInsight?.builds.slice(0, 6) ?? [], carryItems: carryInsight?.items ?? [], levels };
   });
 }
+
+export const explore = share('explore', exploreNow);
+export const getMeta = share('meta', getMetaNow);
+export const getUnitStats = share('unit', getUnitStatsNow);
+export const getItemStats = share('item', getItemStatsNow);
+export const getTraitStats = share('trait', getTraitStatsNow);
+export const resolveCompId = share('comp-id', resolveCompIdNow);
+export const getComp = share('comp', getCompNow);
 
 /** id → [average placement, play rate], for rows with at least minN games (home and collection tiles). */
 export type StatMap = Record<string, [number, number]>;

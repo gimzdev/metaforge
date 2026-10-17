@@ -1,5 +1,6 @@
 import { configuredSetNumber, QUEUES } from '@/config/game';
 import { cachedAsync } from '@/lib/cache';
+import { shared } from '@/lib/shared-cache';
 import { mapLimit, matchToRecords, queueOf } from '@/lib/ingest';
 import { getAccountByPuuid, getAccountByRiotId, getActivePlatform, getLadder, getLeagueEntries, getMatch, getMatchIds, getSummoner, RiotError } from '@/lib/riot/api';
 import type { LadderTier, LeagueEntryDto, MatchDto } from '@/lib/riot/api';
@@ -197,7 +198,7 @@ function ladderRows(platform: string, list: Awaited<ReturnType<typeof getLadder>
 }
 
 /** Top players on one server, or on every server merged by LP when platformInput is "all". */
-export async function getLeaderboard(platformInput: string, limit = 100) {
+async function getLeaderboardNow(platformInput: string, limit = 100) {
   const all = platformInput.toLowerCase() === 'all';
   const platform = all ? 'all' : getPlatform(normalizePlatform(platformInput) ?? '')?.id;
   if (!platform) throw new RiotError('bad_request', 'Unknown region');
@@ -249,6 +250,9 @@ export async function getLeaderboard(platformInput: string, limit = 100) {
     return { platform, updatedAt: Date.now(), entries };
   });
 }
+
+// Shared by every server for 5 minutes, so ladder views don't each call Riot and Postgres.
+export const getLeaderboard = shared(getLeaderboardNow, ['ladder'], { tags: ['mf-ladder'], revalidate: 300 });
 
 export function profileIconUrl(id: number | null | undefined): string | null {
   return id == null ? null : `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/${id}.jpg`;

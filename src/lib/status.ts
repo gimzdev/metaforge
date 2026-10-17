@@ -4,6 +4,7 @@ import { env } from '@/lib/env';
 import { ingestRunning, lastIngestReport, schedulerInfo } from '@/lib/ingest';
 import { lastKeyErrorAt } from '@/lib/riot/api';
 import { staticDataStatus, tryGetStaticData } from '@/lib/static/load';
+import { shared, STATUS_TAG } from '@/lib/shared-cache';
 import { getStore } from '@/lib/store';
 
 /** /api/status payload, shared by the status page and the header indicator. */
@@ -70,5 +71,10 @@ async function readStatus(): Promise<StatusPayload> {
   };
 }
 
-/** Every open tab polls this, so answers are shared for a few seconds. */
-export const getStatus = (fresh = false) => (fresh ? readStatus() : cachedAsync('status', 10_000, readStatus));
+// The header's data line polls this from every open tab. It only changes when a collection run finishes, and the cron
+// route refreshes it then (revalidateTag), so it is shared by all servers through the data cache instead of read from
+// Postgres on each poll. A read that failed is not shared.
+const sharedStatus = shared(readStatus, ['status'], { tags: [STATUS_TAG], revalidate: 4 * 3600, keep: (s) => !s.store.includes('unavailable') });
+
+/** The status page asks for a fresh read; the header's line gets the shared copy. */
+export const getStatus = (fresh = false) => (fresh ? readStatus() : cachedAsync('status', 60_000, () => sharedStatus()));
