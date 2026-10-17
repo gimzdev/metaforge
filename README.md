@@ -19,24 +19,17 @@ Teamfight Tactics tier lists, stats explorer and team builder.
 </tr>
 </table>
 
-## What's in it
+| | |
+|---|---|
+| **Meta report** | Comps grouped by carry and graded for the live patch; champion, item and trait tier lists |
+| **Stats explorer** | Filter boards by champions, items, traits and level |
+| **Team builder** | Drag champions onto a board, add items and emblems, save or share the link |
+| **Players** | Ladder and player lookup for every region |
+| **Reading** | Guides and patch notes |
 
-- **Meta report**: comps grouped by carry and graded for the live patch, with champion, item and trait tier lists
-- **Stats explorer**: filter boards by champions, items, traits and level, and see how everything does on them
-- **Team builder**: drag champions onto a board, add items and emblems, save it or share the link
-- **Ladder and player lookup** for every region, **guides** and **patch notes**
+| Data | From |
+|---|---|
+| Matches | High-elo ranked games, Riot Games API (PostgreSQL, or a local folder) |
+| Champions, items, traits | CommunityDragon |
 
-Every stat comes from high-elo ranked games, collected through the Riot Games API.
-
-## Run it
-
-```bash
-npm install
-cp .env.example .env.local   # a Riot API key, and DATABASE_URL for a public site
-npm run dev
-```
-
-Needs Node.js 20.9 or newer. Without `DATABASE_URL` matches are kept in `./.data`; every setting is
-described in `.env.example`.
-
-<sub>MetaForge isn't endorsed by Riot Games. Riot Games and all associated properties are trademarks of Riot Games, Inc. Game data by CommunityDragon.</sub>
+<sub>MetaForge isn't endorsed by Riot Games. Riot Games and all associated properties are trademarks of Riot Games, Inc.</sub>
