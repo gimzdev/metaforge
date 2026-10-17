@@ -17,6 +17,8 @@ Teamfight Tactics tier lists, stats explorer and team builder.
 </tr>
 </table>
 
+<hr>
+
 MetaForge is a Teamfight Tactics site built on real games rather than opinion. Every comp, item and trait
 is graded from high-elo ranked matches for the live patch, so the tier lists move when the game does.
 You can also dig into the numbers yourself and build a board before you queue.
