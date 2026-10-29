@@ -3,6 +3,7 @@ import '@fontsource-variable/fraunces/standard.css';
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
+import { Analytics } from '@vercel/analytics/next';
 import { SiteFooter } from '@/components/footer';
 import { Wordmark } from '@/components/logo';
 import { Providers } from '@/components/providers';
@@ -27,7 +28,7 @@ export const metadata: Metadata = {
   metadataBase: siteUrl(),
   title: { default: 'MetaForge | Tools for Tacticians', template: 'MetaForge | %s' },
   description: 'Teamfight Tactics meta report, comp tier list, stats explorer, team builder and player lookup, built from ranked games.',
-  // The preview image is app/opengraph-image.jpg (written by the installer); X/Twitter shows it large.
+  // The preview image is app/opengraph-image.png (media/metaforge/metaforge-social-preview.png, copied in by the installer); X/Twitter shows it large.
   openGraph: { siteName: 'MetaForge', type: 'website' },
   twitter: { card: 'summary_large_image' },
   // Tab icon: src/app/favicon.ico (16/32/48). Phones use app/apple-icon.tsx, rendered from your logo. Next adds the <link> tags itself.
@@ -78,6 +79,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             </a>
           </main>
         )}
+        <Analytics />
       </body>
     </html>
   );

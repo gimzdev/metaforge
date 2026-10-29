@@ -45,7 +45,13 @@ const SETS: Record<number, SetInfo> = {
       // Riot dates the 18.4 B-patch October 7 (Pacific time); it rolled out on PC first. The go-live hour is an estimate
       // (about 4 PM PT, after the 18.4 launch). Set it to the hour your matches switch to the new version if you need it exact.
       { label: '18.4b', start: '2026-10-07', at: '2026-10-07T23:00:00Z' },
-      { label: '18.5', start: '2026-10-21', tentative: true },
+      // Riot dates 18.5 October 21 (Pacific time) and gives no hour; the go-live hour is an estimate (10:00 PT), as for 18.4.
+      // Set it to the hour your matches switch to the new version if you need it exact.
+      { label: '18.5', start: '2026-10-21', at: '2026-10-21T17:00:00Z' },
+      // Riot's notes date the 18.5 B-patch October 22, again without an hour (estimated 10:00 PT).
+      { label: '18.5b', start: '2026-10-22', at: '2026-10-22T17:00:00Z' },
+      // A second 18.5 mid-patch update, announced on X October 26 for the next day; the hour is an estimate (10:00 PT).
+      { label: '18.5c', start: '2026-10-27', at: '2026-10-27T17:00:00Z' },
       { label: '18.6', start: '2026-11-04', tentative: true },
       { label: '18.6b', start: '2026-11-11', tentative: true },
     ],

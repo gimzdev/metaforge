@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
-import { Check, Eraser, FlaskConical, Info, Link2, Save, Search, Trash2, X } from '@/components/icons';
+import { Check, Eraser, FlaskConical, Info, Link2, Save, Search, Swords, Trash2, X } from '@/components/icons';
 import { StarShapes, TraitHex } from '@/components/game/entities';
 import { GameImage } from '@/components/game/game-image';
 import { RichText } from '@/components/game/rich-text';
@@ -593,6 +593,20 @@ export function BuilderApp({ initialCode }: { initialCode: string | null }) {
     return filters.length ? `/explorer?f=${encodeFilters(filters)}` : null;
   }, [board, traits]);
 
+  // This board in Patchlab, the balance sandbox (patchlab.metaforge.lol): it opens there as blue, against a sample board,
+  // ready to fight thousands of times. Patchlab reads champions and items by these same keys.
+  const patchlabHref = useMemo(() => {
+    if (empty) return null;
+    const pieces = Object.entries(board).map(([hex, u]) => {
+      const h = Number(hex);
+      return [u.key, Math.min(3, Math.max(1, u.star)), (4 + Math.floor(h / COLS)) * COLS + (h % COLS), ...u.items];
+    });
+    const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, s: `tft${index.data.set.number}`, p: pieces, l: {}, q: {}, n: 5000 }));
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return `https://patchlab.metaforge.lol/#s=j${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+  }, [board, empty, index]);
+
   const selectedUnit = selected !== null ? board[selected] : undefined;
   const selectedChampion = selectedUnit ? index.champion(selectedUnit.key) : undefined;
   const ability = selectedChampion ? text?.abilities[selectedChampion.key] : undefined;
@@ -637,6 +651,18 @@ export function BuilderApp({ initialCode }: { initialCode: string | null }) {
                       <FlaskConical className="size-4" />
                       Explore similar
                     </Link>
+                  )}
+                  {patchlabHref && (
+                    <a
+                      href={patchlabHref}
+                      target="_blank"
+                      rel="noopener"
+                      title="Fight this board thousands of times in Patchlab, the balance sandbox"
+                      className={cn(TOOL_BUTTON, 'hover:border-lichen/45 hover:text-moon')}
+                    >
+                      <Swords className="size-4" />
+                      Simulate
+                    </a>
                   )}
                   <button
                     type="button"

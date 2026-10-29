@@ -563,6 +563,14 @@ export function SiteHeader() {
               </Link>
             );
           })}
+          {/* Patchlab, the balance sandbox, lives on its own subdomain */}
+          <a
+            href="https://patchlab.metaforge.lol"
+            title="Balance sandbox: patch a unit, simulate thousands of fights"
+            className="relative inline-flex shrink-0 items-center text-[14px] text-lichen transition-colors hover:text-moon"
+          >
+            Patchlab
+          </a>
         </div>
       </nav>
     </header>

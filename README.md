@@ -6,6 +6,8 @@ Teamfight Tactics tier lists, stats explorer and team builder.
 
 [metaforge.lol](https://metaforge.lol) · Next.js · TypeScript · PostgreSQL
 
+<img src="docs/screenshots/metaforge-preview.gif" alt="MetaForge: a comp's board in the meta report, a filter in the stats explorer, then a champion dragged into the team builder">
+
 <table>
 <tr>
 <td align="center" width="50%"><img src="docs/screenshots/metaforge-home.png" alt="Home"><br><sub>Home</sub></td>
@@ -16,6 +18,8 @@ Teamfight Tactics tier lists, stats explorer and team builder.
 <td align="center" width="50%"><img src="docs/screenshots/metaforge-team-builder.png" alt="Team builder"><br><sub>Team builder</sub></td>
 </tr>
 </table>
+
+<hr>
 
 MetaForge is a Teamfight Tactics site built on real games rather than opinion. Every comp, item and trait
 is graded from high-elo ranked matches for the live patch, so the tier lists move when the game does.
@@ -28,6 +32,7 @@ You can also dig into the numbers yourself and build a board before you queue.
 | **Team builder** | Drag champions onto a board, add items and emblems, save it or share the link |
 | **Players** | Ladder and player lookup for every region |
 | **Reading** | Guides and patch notes |
+| **Patchlab** | The balance sandbox at [patchlab.metaforge.lol](https://patchlab.metaforge.lol): the builder's Simulate button fights a board thousands of times there, and the meta report's comps are one drag away |
 
 Matches are collected through the Riot Games API and kept in PostgreSQL (or a local folder without one);
 champions, items and traits come from CommunityDragon, so a new set needs no code change.

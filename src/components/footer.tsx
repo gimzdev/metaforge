@@ -12,12 +12,20 @@ export function SiteFooter() {
             officially involved in producing or managing Riot Games properties. Riot Games and all associated properties
             are trademarks or registered trademarks of Riot Games, Inc.
           </p>
+          {/* No noreferrer: gimzdev.com's analytics can then show MetaForge as where the visit came from */}
+          <p className="mt-3 text-xs text-fog">
+            Made by{' '}
+            <a className="text-lichen hover:text-moon" href="https://gimzdev.com" target="_blank" rel="noopener">
+              Gimz
+            </a>
+          </p>
         </div>
         <nav className="grid content-start gap-2 text-sm" aria-label="Tools">
           <span className="eyebrow mb-1 text-fog">Tools</span>
           <Link className="text-lichen hover:text-moon" href="/meta">Meta report</Link>
           <Link className="text-lichen hover:text-moon" href="/explorer">Explorer</Link>
           <Link className="text-lichen hover:text-moon" href="/builder">Team builder</Link>
+          <a className="text-lichen hover:text-moon" href="https://patchlab.metaforge.lol">Patchlab</a>
         </nav>
         <nav className="grid content-start gap-2 text-sm" aria-label="More">
           <span className="eyebrow mb-1 text-fog">More</span>
