@@ -1,3 +1,5 @@
 {
-  "crons": [{ "path": "/api/cron/ingest", "schedule": "0 */3 * * *" }]
+  "regions": ["cle1"],
+  "crons": [{ "path": "/api/cron/ingest", "schedule": "0 */3 * * *" }],
+  "git": { "deploymentEnabled": false }
 }

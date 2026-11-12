@@ -380,33 +380,73 @@ function itemOffense(ds: Dataset, index: StaticIndex<StaticData>) {
   return Float32Array.from(ds.itemKeys, (k) => weight(k));
 }
 
+/** How much of an item's value is defense: its vests, cloaks and belts, which completed items inherit from their components. */
+const COMPONENT_DEFENSE: Record<string, number> = { tft_item_chainvest: 1, tft_item_negatroncloak: 1, tft_item_giantsbelt: 1 };
+/** A second carry's damage build next to the carry's: two of them carry together from about two thirds. */
+const DUO_SHARE = 0.65;
+/** A main tank holds about two tank items (Gargoyle Stoneplate and Warmog's Armor, four tank components) or more. */
+const MAIN_TANK_DEFENSE = 3;
+
+function itemDefense(ds: Dataset, index: StaticIndex<StaticData>) {
+  const byName = new Map(ds.static.items.map((i) => [i.name.toLowerCase(), i]));
+  const weight = (key: string, depth = 0): number => {
+    const item = index.item(key);
+    if (!item) return 0;
+    if (item.category === 'component') return COMPONENT_DEFENSE[item.key] ?? 0;
+    if (item.category === 'emblem' || item.category === 'support' || item.category === 'artifact') return 0;
+    if (item.category === 'radiant' && depth === 0) {
+      const base = byName.get(item.name.toLowerCase().replace(/^radiant\s+/, ''));
+      return base ? weight(base.key, 1) : 0;
+    }
+    if (item.composition.length === 2) return item.composition.reduce((sum, c) => sum + weight(c, depth + 1), 0);
+    return 0;
+  };
+  return Float32Array.from(ds.itemKeys, (k) => weight(k));
+}
+
 /**
  * Group boards into comps the way players name them.
- * 1. Every board gets a carry: the unit whose items do the most damage (not a tank in armor). A second unit makes it a
- *    duo ("Aphelios & Nidalee") only with a damage build of its own and a trait shared with the carry, so a legendary
- *    holding a stray late item doesn't become a co-carry.
+ * 1. Every board gets a carry: the unit whose items do the most damage, whatever its role (a frontline Kha'Zix with damage
+ *    items carries, a tank in armor doesn't; Lux never does). A second unit makes it a duo ("Aphelios & Nidalee") only with
+ *    a damage build of its own and a trait shared with the carry, so a legendary holding a stray late item doesn't become a
+ *    co-carry. The board's main tank is the unit holding the most tank items.
  * 2. Groups that field nearly the same units (items landed on a different unit that game) merge into the bigger one.
- * 3. Names come from the merged group: its usual carry and trait ("Inferno Kha'Zix"), or both carries when most boards run the duo.
+ * 3. Names come from the merged group: its two carries when most boards run two real damage builds ("Sivir & Ashe"), else
+ *    its ultra carry with the main tank most boards build ("Kha'Zix & Hecarim", "Azir & Rammus"), else the carry with its
+ *    vertical ("Juggernaut Zyra") or its plan ("Veigar Reroll"). A trait the comp only splashes (3 Elderwood) never names it.
  */
 function assignClusters(ds: Dataset) {
   const index = indexStatic(ds.static);
   const offense = itemOffense(ds, index);
+  const defense = itemDefense(ds, index);
   const C = ds.champKeys.length;
   const champTraits = ds.champKeys.map((k) => (index.champion(k)?.traits ?? []).map((t) => ds.traitIdx.get(t.toLowerCase()) ?? -1).filter((t) => t >= 0));
 
-  // Who can carry: 0 anyone; 1 never (tanks and supports); 2 a tank that carries by holding items (Malphite, Maokai), scored by item count.
-  const carryClass = Uint8Array.from(ds.champKeys, (k) => {
+  // Who can carry: anyone whose items do more damage than they defend, whatever its role. 1: never, Lux (the Avatar): a
+  // legendary in one of many forms is too hard to hit to build a comp on, and she plays as a side carry. 2: a tank that
+  // carries by holding items (Malphite, Maokai), which counts its items when nobody on the board holds a damage build.
+  const avatar = ds.traitIdx.get(index.traitByName(SET_RULES.doubleTraitHolder)?.key ?? '') ?? -1;
+  const carryClass = Uint8Array.from(ds.champKeys, (k, ch) => {
     const c = index.champion(k) as ({ baseName?: string; name: string; row: number } | undefined);
     if (!c) return 0;
-    const spec = POSITION_SPECS[norm(c.baseName || c.name)];
-    if (spec?.carry === 'tank') return 2;
-    if (spec?.carry) return 0;
-    if (spec?.role === 'tank' || spec?.role === 'support') return 1;
-    return c.row === 0 ? 1 : 0;
+    if (avatar >= 0 && champTraits[ch].includes(avatar)) return 1;
+    return POSITION_SPECS[norm(c.baseName || c.name)]?.carry === 'tank' ? 2 : 0;
   });
 
-  // Pass 1: carry (and second carry) per board.
-  type Sig = { a: number; b: number; n: number; units: Float64Array; primary: Float64Array; traits: Map<number, number>; size: number; star: number; lvl: number; carried: Map<number, number> };
+  // A trait that says what the comp plays, rather than a few units that happen to share it: past its first breakpoint with
+  // four units or more ("Vanguard Aphelios", "Juggernaut Zyra"), or a trait with a single breakpoint that is on ("Solar Yunara").
+  // 3 Elderwood or 3 Sprykin is a splash, not the comp. The carry's own trait counts only as a full vertical of five or more
+  // ("Rapidfire Aphelios"): two or three units with it say nothing about the board ("Inferno Kennen").
+  const steps = ds.traitKeys.map((k) => (index.trait(k)?.effects ?? []).map((e) => e.minUnits));
+  const vertical = (ti: number, units: number, own: boolean) => {
+    const s = steps[ti];
+    if (!s.length || units < 3) return false;
+    if (own) return units >= 5 && units >= s[Math.min(1, s.length - 1)];
+    return s.length === 1 ? units >= s[0] : units >= 4 && units >= s[1];
+  };
+
+  // Pass 1: carry (and second carry, and main tank) per board.
+  type Sig = { a: number; b: number; trait: number; n: number; units: Float64Array; primary: Float64Array; traits: Map<number, number>; size: number; star: number; lvl: number; carried: Map<number, number>; tanks: Map<number, number> };
   const sigs: Sig[] = [];
   // Keyed by number: a duo by its two champions, a single carry by champion and trait.
   const sigByKey = new Map<number, number>();
@@ -415,14 +455,8 @@ function assignClusters(ds: Dataset) {
   for (let b = 0; b < ds.N; b++) {
     let first = -1, firstScore = -1, firstDamage = 0;
     let second = -1, secondScore = -1, secondDamage = 0;
-    for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) {
-      const c = ds.uChamp[u];
-      if (carryClass[c] === 1) continue;
-      let damage = 0;
-      if (carryClass[c] === 2) damage = ds.iStart[u + 1] - ds.iStart[u];
-      else for (let i = ds.iStart[u]; i < ds.iStart[u + 1]; i++) damage += offense[ds.iItem[i]];
-      // Damage decides; then more items, a higher star level (a 3-star reroll carry), then cost.
-      const score = damage * 100 + (ds.iStart[u + 1] - ds.iStart[u]) * 20 + ds.uStar[u] * 8 + ds.champCost[c] * 2;
+    let tankCarry = -1, tankCarryScore = -1;
+    const pick = (c: number, damage: number, score: number) => {
       if (score > firstScore) {
         if (first >= 0 && first !== c) {
           second = first;
@@ -437,9 +471,51 @@ function assignClusters(ds: Dataset) {
         secondScore = score;
         secondDamage = damage;
       }
+    };
+    for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) {
+      const c = ds.uChamp[u];
+      if (carryClass[c] === 1) continue;
+      const items = ds.iStart[u + 1] - ds.iStart[u];
+      let damage = 0, guard = 0;
+      for (let i = ds.iStart[u]; i < ds.iStart[u + 1]; i++) {
+        damage += offense[ds.iItem[i]];
+        guard += defense[ds.iItem[i]];
+      }
+      // Damage decides; then more items, a higher star level (a 3-star reroll carry), then cost.
+      const tie = items * 20 + ds.uStar[u] * 8 + ds.champCost[c] * 2;
+      if (carryClass[c] === 2 && items * 100 + tie > tankCarryScore) {
+        tankCarry = c;
+        tankCarryScore = items * 100 + tie;
+      }
+      // Tank items make a tank, not a carry.
+      if (damage > guard) pick(c, damage, damage * 100 + tie);
+    }
+    // A tank that carries with its items, on a board with no damage build.
+    if ((first < 0 || firstDamage < MIN_CARRY_DAMAGE) && tankCarry >= 0) {
+      first = tankCarry;
+      firstDamage = Math.floor(tankCarryScore / 100);
+      second = -1;
+      secondDamage = 0;
     }
     // No carry: nobody holds even one finished damage build, or the board is too small to be a comp.
     if (first < 0 || firstDamage < MIN_CARRY_DAMAGE || ds.uStart[b + 1] - ds.uStart[b] < MIN_BOARD_UNITS) continue;
+    // A real second carry: a damage build of its own (about two damage items) close to the carry's; a unit with two items
+    // next to a fully built carry (Zyra beside a 3-item Azir) supports it instead.
+    const twoCarries = second >= 0 && secondDamage >= DUO_DAMAGE && secondDamage >= firstDamage * DUO_SHARE;
+    // The main tank: the unit with the most tank items, two or more (then more items, star, cost), not a carry.
+    let tank = -1, tankScore = -1;
+    for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) {
+      const c = ds.uChamp[u];
+      if (c === first || (twoCarries && c === second)) continue;
+      let guard = 0;
+      for (let i = ds.iStart[u]; i < ds.iStart[u + 1]; i++) guard += defense[ds.iItem[i]];
+      if (guard < MAIN_TANK_DEFENSE) continue;
+      const score = guard * 100 + (ds.iStart[u + 1] - ds.iStart[u]) * 20 + ds.uStar[u] * 8 + ds.champCost[c] * 2;
+      if (score > tankScore) {
+        tank = c;
+        tankScore = score;
+      }
+    }
     // A duo needs two real damage builds (about two damage items each) on units that play together.
     const pair =
       second >= 0 &&
@@ -447,17 +523,23 @@ function assignClusters(ds: Dataset) {
       secondDamage >= DUO_DAMAGE &&
       secondDamage >= firstDamage * 0.6 &&
       champTraits[first].some((t) => !ds.traitUnique[t] && champTraits[second].includes(t));
-    // The comp's trait: the strongest active trait the carry does NOT have ("Juggernaut Ashe", "Lunar Nidalee"). A carry's own
-    // trait says nothing about the board ("Inferno Kennen"), so without another one the comp is named after the carry alone.
-    let trait = -1, traitScore = -1;
+    // Two traits per board. The group's: the strongest active trait the carry does NOT have, three units or more, which keeps
+    // apart comps with the same carry (Draven with Riftbeasts, Draven with Elderwoods). The name's: the strongest vertical (see
+    // `vertical`), or none.
+    let trait = -1, traitScore = -1, named = -1, namedScore = -1;
     const own = champTraits[first];
     const ownPartner = pair ? champTraits[second] : [];
     for (let t = ds.tStart[b]; t < ds.tStart[b + 1]; t++) {
       const ti = ds.tTrait[t];
-      if (ds.traitUnique[ti] || own.includes(ti) || ownPartner.includes(ti)) continue;
-      // Only a trait with real weight on the board names it: three units or more (not a lone Flora Fatalis or Rival).
-      if (ds.tUnits[t] < 3) continue;
+      if (ds.traitUnique[ti] || ownPartner.includes(ti)) continue;
       const score = ds.tStyle[t] * 100 + ds.tUnits[t];
+      // Lux counts the trait she took twice: the comp has to run it without her, or the name would be Lux's.
+      if (vertical(ti, ds.tUnits[t] - (ti === ds.avatarTrait[b] ? 2 : 0), own.includes(ti)) && score > namedScore) {
+        named = ti;
+        namedScore = score;
+      }
+      // Only a trait with real weight on the board groups it: three units or more (not a lone Flora Fatalis or Rival).
+      if (own.includes(ti) || ds.tUnits[t] < 3) continue;
       if (score > traitScore) {
         trait = ti;
         traitScore = score;
@@ -469,7 +551,7 @@ function assignClusters(ds: Dataset) {
     let s = sigByKey.get(key);
     if (s === undefined) {
       s = sigs.length;
-      sigs.push({ a, b: bb, n: 0, units: new Float64Array(C), primary: new Float64Array(2), traits: new Map(), size: 0, star: 0, lvl: 0, carried: new Map() });
+      sigs.push({ a, b: bb, trait: pair ? -1 : trait, n: 0, units: new Float64Array(C), primary: new Float64Array(2), traits: new Map(), size: 0, star: 0, lvl: 0, carried: new Map(), tanks: new Map() });
       sigByKey.set(key, s);
     }
     const sig = sigs[s];
@@ -478,10 +560,11 @@ function assignClusters(ds: Dataset) {
     sig.lvl += ds.level[b];
     for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) if (ds.uChamp[u] === first) sig.star += ds.uStar[u];
     if (pair) sig.primary[first === a ? 0 : 1]++;
-    // Everyone who really carried on this board (the top two damage builds), for naming the comp after its carries.
+    // Everyone who really carried on this board (the carry, and a second real damage build), and its main tank, to name the comp.
     sig.carried.set(first, (sig.carried.get(first) ?? 0) + 1);
-    if (second >= 0 && secondDamage >= MIN_CARRY_DAMAGE) sig.carried.set(second, (sig.carried.get(second) ?? 0) + 1);
-    if (trait >= 0) sig.traits.set(trait, (sig.traits.get(trait) ?? 0) + 1);
+    if (twoCarries) sig.carried.set(second, (sig.carried.get(second) ?? 0) + 1);
+    if (tank >= 0) sig.tanks.set(tank, (sig.tanks.get(tank) ?? 0) + 1);
+    if (named >= 0) sig.traits.set(named, (sig.traits.get(named) ?? 0) + 1);
     for (let u = ds.uStart[b]; u < ds.uStart[b + 1]; u++) sig.units[ds.uChamp[u]]++;
     boardSig[b] = s;
   }
@@ -522,7 +605,7 @@ function assignClusters(ds: Dataset) {
   }
 
   // What each surviving group plays: which carry leads it, how often it runs a duo, which trait.
-  type Group = { n: number; share: Map<number, number>; lead: Map<number, number>; traits: Map<number, number>; size: number; star: number; lvl: number };
+  type Group = { n: number; share: Map<number, number>; lead: Map<number, number>; traits: Map<number, number>; tanks: Map<number, number>; size: number; star: number; lvl: number };
   const bump = <K,>(m: Map<K, number>, k: K, v: number) => m.set(k, (m.get(k) ?? 0) + v);
   const top = <K,>(m: Map<K, number>): [K, number] | null => {
     let best: [K, number] | null = null;
@@ -534,7 +617,7 @@ function assignClusters(ds: Dataset) {
     const r = root(s);
     const sig = sigs[s];
     let g = groups.get(r);
-    if (!g) groups.set(r, (g = { n: 0, share: new Map(), lead: new Map(), traits: new Map(), size: 0, star: 0, lvl: 0 }));
+    if (!g) groups.set(r, (g = { n: 0, share: new Map(), lead: new Map(), traits: new Map(), tanks: new Map(), size: 0, star: 0, lvl: 0 }));
     g.n += sig.n;
     for (const [c, k] of sig.carried) bump(g.share, c, k);
     g.size += sig.size;
@@ -545,9 +628,54 @@ function assignClusters(ds: Dataset) {
       bump(g.lead, sig.b, sig.primary[1]);
     } else bump(g.lead, sig.a, sig.n);
     for (const [t, n] of sig.traits) bump(g.traits, t, n);
+    for (const [c, n] of sig.tanks) bump(g.tanks, c, n);
   }
 
-  // Name the surviving groups and point every board at its group.
+  // Name the surviving groups, the most played first. A smaller group whose name is taken is told apart by the trait that
+  // kept it apart from the bigger one.
+  const champ = (c: number) => index.champion(ds.champKeys[c]);
+  const who = (c: number) => champ(c)?.baseName || champ(c)?.name || 'Flex';
+  const named = new Map<number, Omit<Cluster, 'id'> | null>();
+  const usedNames = new Set<string>();
+  for (const [r, g] of [...groups.entries()].sort((x, y) => y[1].n - x[1].n)) {
+    // Comps with a typical board under six units are scattered leftovers, not a comp.
+    if (g.size / g.n < MIN_BOARD_UNITS) {
+      named.set(r, null);
+      continue;
+    }
+    // The comp's carries are the units that most boards of the group really carry with: the top one, and a second carry when
+    // it holds a damage build on almost as many boards ("Sivir & Ashe").
+    const ranked = [...g.share.entries()].sort((x, y) => y[1] - x[1]);
+    const carry = ranked[0]?.[0] ?? top(g.lead)?.[0] ?? sigs[r].a;
+    let partner = -1;
+    if (ranked.length > 1 && ranked[1][1] >= g.n * 0.4 && ranked[1][1] >= ranked[0][1] * 0.6) partner = ranked[1][0];
+    // An ultra carry goes with the main tank most of its boards build ("Kha'Zix & Hecarim", "Azir & Rammus").
+    const mainTank = top(g.tanks);
+    const tank = partner < 0 && mainTank && mainTank[0] !== carry && mainTank[1] >= g.n * 0.5 ? mainTank[0] : -1;
+    // The group's trait must be the one most of its boards run; a minority trait would name a board that doesn't have it.
+    const topTrait = top(g.traits);
+    let trait = topTrait && topTrait[1] >= g.n * 0.5 ? topTrait[0] : -1;
+    const carryCost = champ(carry)?.cost ?? 3;
+    const avgStar = g.star / g.n;
+    const avgLevel = g.lvl / g.n;
+    const compose = (trait: number) => {
+      if (partner >= 0) return `${who(carry)} & ${who(partner)}`;
+      if (tank >= 0) return `${who(carry)} & ${who(tank)}`;
+      const tr = trait >= 0 ? index.trait(ds.traitKeys[trait]) : undefined;
+      // Without a main tank or a trait that says more than the carry itself, the economy plan names it.
+      return tr ? `${tr.name} ${who(carry)}` : `${who(carry)}${carryCost <= 3 && avgStar >= 2.6 ? ' Reroll' : avgLevel >= 8.7 ? ' Fast 9' : ' Flex'}`;
+    };
+    let name = compose(trait);
+    if (usedNames.has(name) && sigs[r].trait >= 0 && sigs[r].trait !== trait) {
+      trait = sigs[r].trait;
+      const tr = index.trait(ds.traitKeys[trait]);
+      if (tr) name = `${tr.name} ${name}`;
+    }
+    usedNames.add(name);
+    named.set(r, { trait: partner < 0 && tank < 0 ? trait : -1, carry, name });
+  }
+
+  // Point every board at its group.
   const clusterOf = new Map<number, number>();
   const usedIds = new Set<string>();
   for (let b = 0; b < ds.N; b++) {
@@ -555,38 +683,17 @@ function assignClusters(ds: Dataset) {
     const r = root(boardSig[b]);
     let k = clusterOf.get(r);
     if (k === undefined) {
-      const g = groups.get(r)!;
-      k = ds.clusters.length;
-      const champ = (c: number) => index.champion(ds.champKeys[c]);
-      const who = (c: number) => champ(c)?.baseName || champ(c)?.name || 'Flex';
-      // The comp's carries are the units that most boards of the group really carry with: the top one, and a partner when it
-      // carries on almost as many boards ("Yi & Rengar", "Azir & Rammus").
-      const ranked = [...g.share.entries()].sort((x, y) => y[1] - x[1]);
-      const carry = ranked[0]?.[0] ?? top(g.lead)?.[0] ?? sigs[r].a;
-      let partner = -1;
-      if (ranked.length > 1 && ranked[1][1] >= g.n * 0.4 && ranked[1][1] >= ranked[0][1] * 0.6) partner = ranked[1][0];
-      // Comps with a typical board under six units are scattered leftovers, not a comp.
-      if (g.size / g.n < MIN_BOARD_UNITS) {
+      const cl = named.get(r);
+      if (!cl) {
         clusterOf.set(r, -1);
         continue;
       }
-      // The group's trait must be the one most of its boards run; a minority trait would name a board that doesn't have it.
-      const topTrait = top(g.traits);
-      const trait = topTrait && topTrait[1] >= g.n * 0.5 ? topTrait[0] : -1;
-      const tr = trait >= 0 ? index.trait(ds.traitKeys[trait]) : undefined;
-      const carryCost = champ(carry)?.cost ?? 3;
-      const avgStar = g.star / g.n;
-      const avgLevel = g.lvl / g.n;
-      // Without a trait that says more than the carry itself, the economy plan names it.
-      const plan = tr ? '' : carryCost <= 3 && avgStar >= 2.6 ? ' Reroll' : avgLevel >= 8.7 ? ' Fast 9' : ' Flex';
-      const lead = partner >= 0 ? `${who(carry)} & ${who(partner)}` : who(carry);
-      // A duo is named by its two carries; a trait in front would only crowd the name.
-      const name = `${tr && partner < 0 ? `${tr.name} ` : ''}${lead}${partner >= 0 ? '' : plan}`;
-      const id = slugify(name) || `comp-${k}`;
+      k = ds.clusters.length;
+      const id = slugify(cl.name) || `comp-${k}`;
       let unique = id;
       for (let i = 2; usedIds.has(unique); i++) unique = `${id}-${i}`;
       usedIds.add(unique);
-      ds.clusters.push({ id: unique, trait, carry, name });
+      ds.clusters.push({ id: unique, ...cl });
       clusterOf.set(r, k);
     }
     ds.comp[b] = k;

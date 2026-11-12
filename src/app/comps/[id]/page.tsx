@@ -1,12 +1,15 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { FlaskConical, Hexagon } from '@/components/icons';
+import { FlaskConical, Hexagon, Swords } from '@/components/icons';
+import { TrackedLink } from '@/components/tracked-link';
 import { TypicalBoardPanel } from '@/components/game/board-expander';
 import { ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
 import { AvgPlace, CompName, GradeBadge, SummaryTiles } from '@/components/stats/bits';
 import { EntityTable, ScopeBar } from '@/components/stats/table';
-import { ButtonLink, DetailHero, Panel } from '@/components/ui';
+import { ButtonLink, DetailHero, Panel, buttonClass } from '@/components/ui';
+import { configuredSetNumber, currentPatch } from '@/config/game';
 import { encodeBoard } from '@/lib/builder';
+import { patchlabHref } from '@/lib/patchlab';
 import { compBoard } from '@/lib/placement';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
 import { indexStatic, splashSources } from '@/lib/static';
@@ -24,9 +27,11 @@ export async function generateMetadata({ params, searchParams }: { params: Param
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   const result = await getComp(id, scopeFrom(sp)).catch(() => null);
   if (!result) return { title: 'Comp not found' };
+  // the patch the numbers are from, or the live one when they span every patch (search titles name a patch)
+  const patch = result.scope.patch !== 'all' ? result.scope.patch : currentPatch(configuredSetNumber())?.label;
   return {
-    title: result.comp.name,
-    description: `How ${result.comp.name} performs in ranked TFT: core units, carry items, levels and placements.`,
+    title: `${result.comp.name}: TFT comp${patch ? `, patch ${patch}` : ''}`,
+    description: `How ${result.comp.name} performs in ranked TFT${patch ? ` on patch ${patch}` : ''}: core units, carry items, levels and placements.`,
     alternates: { canonical: `/comps/${id}` },
   };
 }
@@ -45,7 +50,10 @@ export default async function CompPage({ params, searchParams }: { params: Param
   const { comp } = result;
 
   // The builder opens on the typical board the page shows, every unit of it (Lux keeps the trait she plays as).
-  const builderHref = `/builder?b=${encodeBoard(compBoard(comp.units, index), Math.round(comp.level))}`;
+  const board = compBoard(comp.units, index);
+  const builderHref = `/builder?b=${encodeBoard(board, Math.round(comp.level))}`;
+  // The same board in Patchlab, fought thousands of times against a sample board
+  const simulateHref = patchlabHref(board, index.data.set.number, 'comp');
   const filters: Filter[] = [];
   if (comp.trait) {
     const t = comp.traits.find((x) => x.id === comp.trait);
@@ -77,6 +85,12 @@ export default async function CompPage({ params, searchParams }: { params: Param
                 <FlaskConical className="size-4" aria-hidden />
                 Explore these boards
               </ButtonLink>
+              {simulateHref && (
+                <TrackedLink href={simulateHref} event="simulate_click" data={{ from: 'comp' }} className={buttonClass('secondary', 'sm')} title="Fight this board thousands of times in Patchlab, the balance sandbox">
+                  <Swords className="size-4" aria-hidden />
+                  Simulate
+                </TrackedLink>
+              )}
               <ButtonLink href={builderHref} size="sm" variant="primary">
                 <Hexagon className="size-4" aria-hidden />
                 Open in builder

@@ -4,6 +4,7 @@ import { Collection } from '@/components/collection';
 import { ChampionIcon } from '@/components/game/entities';
 import { ImageTile, SectionHead, StatsCarousel, ToolColumn, type CarouselItem } from '@/components/home';
 import { PlayerSearch } from '@/components/player/player-search';
+import { SupportNote } from '@/components/support';
 import { currentPatch, getSetInfo } from '@/config/game';
 import { env } from '@/lib/env';
 import { ingestRunning } from '@/lib/ingest';
@@ -230,6 +231,10 @@ export default async function HomePage() {
           />
         </div>
       </section>
+
+      <SupportNote className="-mt-12">
+        MetaForge is free, with no ads and no paywall. One developer builds it, and supporters cover the servers that collect the games.
+      </SupportNote>
 
       {(guidesArt || ladderArt) && (
         <section>

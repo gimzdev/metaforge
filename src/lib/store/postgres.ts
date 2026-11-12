@@ -69,12 +69,16 @@ CREATE TABLE IF NOT EXISTS mf_blob (
 const SCHEMA_OBJECTS = [...SCHEMA.matchAll(/CREATE (?:TABLE|INDEX) IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
 
 /** Connection dropped by the server or network (Neon restarting/scaling a compute, a frozen instance's stale socket). */
+const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
 function droppedConnection(error: unknown) {
   const e = error as { code?: unknown; message?: unknown } | null;
   const code = typeof e?.code === 'string' ? e.code : '';
   return (
-    ['57P01', '57P02', '57P03', '08000', '08003', '08006', 'ECONNRESET', 'EPIPE'].includes(code) ||
-    /Connection terminated unexpectedly|not queryable/i.test(typeof e?.message === 'string' ? e.message : '')
+    ['57P01', '57P02', '57P03', '08000', '08003', '08006', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT'].includes(code) ||
+    /Connection terminated unexpectedly|Connection terminated due to connection timeout|timeout exceeded when trying to connect|not queryable/i.test(
+      typeof e?.message === 'string' ? e.message : '',
+    )
   );
 }
 
@@ -107,10 +111,17 @@ export class PostgresStore implements Store {
       connectionString: normalizeSslMode(this.connectionString),
       enableChannelBinding: this.channelBinding,
       max: env.databasePoolMax,
-      idleTimeoutMillis: 20_000,
+      // Neon closes idle connections on its side: ours are let go first, and kept alive while they are in use
+      idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 15_000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
     });
-    pool.on('error', (err) => console.error('[metaforge] postgres pool error:', err.message));
+    // An idle client the server closed is simply replaced on the next query: not worth an error line each time.
+    pool.on('error', (err) => {
+      if (droppedConnection(err)) return;
+      console.error('[metaforge] postgres pool error:', err.message);
+    });
     return pool;
   }
 
@@ -129,7 +140,13 @@ export class PostgresStore implements Store {
   }
 
   init() {
+    // The first connection of a run (the ingest cron) may meet a sleeping database: one retry before giving up.
     this.ready ??= this.ensureSchema()
+      .catch(async (error: Error) => {
+        if (!droppedConnection(error)) throw error;
+        await pause(2000);
+        return this.ensureSchema();
+      })
       .catch(async (error: Error) => {
         // A server or proxy without channel binding: fall back to plain SCRAM (still over TLS).
         if (!this.channelBinding || !/SASL|SCRAM|channel binding/i.test(error.message)) throw error;
@@ -147,13 +164,14 @@ export class PostgresStore implements Store {
     return this.ready;
   }
 
-  /** Statements sent here are idempotent, so a dropped connection gets one retry. */
+  /** Statements sent here are idempotent, so a dropped connection or a slow first connect gets one retry. */
   private async query<R extends QueryResultRow = QueryResultRow>(sql: string, params: unknown[] = []) {
     await this.init();
     try {
       return await this.pool.query<R>(sql, params);
     } catch (error) {
       if (!droppedConnection(error)) throw error;
+      await pause(1500); // a suspended Neon compute takes a moment to wake
       return this.pool.query<R>(sql, params);
     }
   }

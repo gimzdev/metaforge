@@ -1,5 +1,8 @@
 import Link from 'next/link';
+import { Heart } from '@/components/icons';
 import { Wordmark } from '@/components/logo';
+import { buttonClass } from '@/components/ui';
+import { PATREON } from '@/lib/site';
 
 export function SiteFooter() {
   return (
@@ -7,10 +10,31 @@ export function SiteFooter() {
       <div className="mx-auto grid max-w-[1400px] gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.4fr_1fr_1fr]">
         <div className="max-w-md">
           <Wordmark />
+          <div className="mt-5">
+            <a href={PATREON} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'sm')}>
+              <Heart className="size-3.5 text-wisp" fill="currentColor" />
+              Support on Patreon
+            </a>
+          </div>
           <p className="mt-4 text-xs leading-relaxed text-fog">
             MetaForge isn&apos;t endorsed by Riot Games and doesn&apos;t reflect the views or opinions of Riot Games or anyone
             officially involved in producing or managing Riot Games properties. Riot Games and all associated properties
             are trademarks or registered trademarks of Riot Games, Inc.
+          </p>
+          {/* No noreferrer: gimzdev.com's analytics can then show MetaForge as where the visit came from */}
+          <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-fog">
+            <span>
+              Made by{' '}
+              <a className="text-lichen hover:text-moon" href="https://gimzdev.com/?utm_source=metaforge" target="_blank" rel="noopener">
+                Gimz
+              </a>
+            </span>
+            <a className="text-lichen hover:text-moon" href="https://gimzdev.com/?utm_source=metaforge#contact" target="_blank" rel="noopener">
+              Hire me
+            </a>
+            <a className="text-lichen hover:text-moon" href="https://gimzdev.com/support?utm_source=metaforge" target="_blank" rel="noopener">
+              Support
+            </a>
           </p>
         </div>
         <nav className="grid content-start gap-2 text-sm" aria-label="Tools">
@@ -18,6 +42,7 @@ export function SiteFooter() {
           <Link className="text-lichen hover:text-moon" href="/meta">Meta report</Link>
           <Link className="text-lichen hover:text-moon" href="/explorer">Explorer</Link>
           <Link className="text-lichen hover:text-moon" href="/builder">Team builder</Link>
+          <a className="text-lichen hover:text-moon" href="https://patchlab.metaforge.lol">Patchlab</a>
         </nav>
         <nav className="grid content-start gap-2 text-sm" aria-label="More">
           <span className="eyebrow mb-1 text-fog">More</span>

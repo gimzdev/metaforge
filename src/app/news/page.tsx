@@ -7,6 +7,7 @@ import { ESPORTS, ESPORTS_SOURCE, OFFICIAL_LINKS, PATCH_NOTES, type Change, type
 import { AugmentIcon, ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
 import { PageHeader } from '@/components/ui';
 import { HScroll } from '@/components/ui-client';
+import { PATCHLAB_PATCHES, patchlabPatchHref } from '@/lib/patchlab';
 import { param, type SearchParams } from '@/lib/search-params';
 import { getStaticData } from '@/lib/static/load';
 import type { StaticData } from '@/lib/static/types';
@@ -324,6 +325,9 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
             </nav>
             <div className="space-y-2.5 border-t hairline pt-5 text-sm">
               <ExtLink href={note.source.url} className="flex items-center justify-between gap-3">Riot&apos;s full notes</ExtLink>
+              {PATCHLAB_PATCHES.has(note.id) && (
+                <ExtLink href={patchlabPatchHref(note.id)} className="flex items-center justify-between gap-3">Simulated in Patchlab</ExtLink>
+              )}
               <Link href="/guides#set-mechanics" className="group flex items-center justify-between gap-3 text-lichen transition-colors hover:text-wisp">
                 How {info.name} works
                 <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
@@ -333,9 +337,16 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
         </aside>
       </div>
 
-      <ExtLink href={note.source.url} className="inline-flex items-center gap-1.5 text-sm font-medium lg:hidden">
-        Riot&apos;s full {note.label} notes
-      </ExtLink>
+      <div className="flex flex-wrap gap-x-6 gap-y-2 lg:hidden">
+        <ExtLink href={note.source.url} className="inline-flex items-center gap-1.5 text-sm font-medium">
+          Riot&apos;s full {note.label} notes
+        </ExtLink>
+        {PATCHLAB_PATCHES.has(note.id) && (
+          <ExtLink href={patchlabPatchHref(note.id)} className="inline-flex items-center gap-1.5 text-sm font-medium">
+            {note.label}, simulated in Patchlab
+          </ExtLink>
+        )}
+      </div>
 
       <section className="space-y-5 border-t hairline pt-10">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
