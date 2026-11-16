@@ -4,7 +4,9 @@ import { Collection } from '@/components/collection';
 import { ChampionIcon } from '@/components/game/entities';
 import { ImageTile, SectionHead, StatsCarousel, ToolColumn, type CarouselItem } from '@/components/home';
 import { PlayerSearch } from '@/components/player/player-search';
-import { currentPatch, getSetInfo } from '@/config/game';
+import { SupportNote } from '@/components/support';
+import { currentPatch, getSetInfo, setNamed, setTitle } from '@/config/game';
+import { SET19 } from '@/content/set19';
 import { env } from '@/lib/env';
 import { ingestRunning } from '@/lib/ingest';
 import { brand } from '@/lib/site';
@@ -116,10 +118,15 @@ export default async function HomePage() {
       <section className="-mt-10 grid min-h-[600px] grid-cols-1 items-center gap-12 pb-4 pt-14 sm:min-h-[660px] lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)] lg:gap-16 short:min-h-[min(660px,calc(100svh_-_211px))] short:pb-2 short:pt-8">
         <div className="max-w-2xl">
           <div className="eyebrow flex flex-wrap items-center gap-x-3 gap-y-1 text-wisp">
-            <span>Set {set.number} · {set.name}</span>
+            <span>{setTitle(set, ' · ')}</span>
             {live && (
               <Link href="/news" className="text-moon/80 transition-colors hover:text-moon">
                 Patch {live}
+              </Link>
+            )}
+            {set.number < SET19.number && (
+              <Link href="/set-19" className="text-moon/80 transition-colors hover:text-moon">
+                Next: {SET19.name}
               </Link>
             )}
           </div>
@@ -200,7 +207,7 @@ export default async function HomePage() {
       )}
 
       <section>
-        <SectionHead label="01 · Collection" title={`Discover the ${set.name}`} />
+        <SectionHead label="01 · Collection" title={setNamed(set) ? `Discover the ${set.name}` : `Discover ${set.name}`} />
         <Collection stats={stats} title={null} />
       </section>
 
@@ -230,6 +237,10 @@ export default async function HomePage() {
           />
         </div>
       </section>
+
+      <SupportNote className="-mt-12">
+        MetaForge is free, with no ads and no paywall. One developer builds it, and supporters cover the servers that collect the games.
+      </SupportNote>
 
       {(guidesArt || ladderArt) && (
         <section>

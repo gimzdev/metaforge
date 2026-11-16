@@ -1,23 +1,27 @@
-import { configuredSetNumber, getSetInfo, RANKED_QUEUE } from '@/config/game';
+import { getSetInfo, liveSetNumber, pinnedSetNumber, RANKED_QUEUE } from '@/config/game';
 import { singleton } from '@/lib/cache';
 import { env } from '@/lib/env';
 import { fetchAccountByPuuid, getDivisionPage, getLadder, getMatch, getMatchIds, riotHeadroom, RiotError } from '@/lib/riot/api';
 import type { LadderTier, LeagueItemDto, MatchDto } from '@/lib/riot/api';
 import { getPlatform, parseRegionList, platformFromMatchId } from '@/lib/riot/regions';
+import { syncPatchState } from '@/lib/patches';
 import { refreshStoredBoards } from '@/lib/stats/dataset';
 import { getStore, type BoardRecord, type MatchRecord, type PlayerRecord } from '@/lib/store';
 import { sleep } from '@/lib/utils';
 
 export const queueOf = (match: MatchDto) => Number(match.info.queue_id ?? match.info.queueId ?? 0);
 
-/** Boards are kept for ranked games of the tracked set only. */
+/**
+ * Boards are kept for ranked games from the tracked set on (`setNumber` is the pinned set, see pinnedSetNumber): when
+ * Riot moves ranked play to the next set, its games are stored from the first one, and the site follows them.
+ */
 export function matchToRecords(match: MatchDto, setNumber: number) {
   const info = match.info;
   const platform = platformFromMatchId(match.metadata.match_id);
   const queueId = queueOf(match);
   const participants = Array.isArray(info.participants) ? info.participants : [];
   const standard = !info.tft_game_type || info.tft_game_type === 'standard';
-  const eligible = info.tft_set_number === setNumber && queueId === RANKED_QUEUE && standard && participants.length >= 8;
+  const eligible = Number(info.tft_set_number) >= setNumber && queueId === RANKED_QUEUE && standard && participants.length >= 8;
 
   const record: MatchRecord = {
     matchId: match.metadata.match_id,
@@ -309,7 +313,11 @@ async function crawlPlayers(regions: string[], deadline: number, log: (m: string
 
 export async function runIngest(options: { regions?: string[]; log?: (message: string) => void } = {}): Promise<IngestReport> {
   const log = options.log ?? ((m: string) => console.log(`[metaforge] ${m}`));
-  const setNumber = configuredSetNumber();
+  // The set ranked games are on (the report and the log name it). What is asked of Riot and what is kept goes by the
+  // pinned set (`tracked`), the oldest one the site follows: the next set's games are stored from its first one, and
+  // nothing is removed because a new set began.
+  const setNumber = liveSetNumber();
+  const tracked = pinnedSetNumber();
   const store = getStore();
   const startedAt = Date.now();
   const base: IngestReport = { ok: false, startedAt, finishedAt: startedAt, setNumber, store: store.describe(), regions: [] };
@@ -326,14 +334,14 @@ export async function runIngest(options: { regions?: string[]; log?: (message: s
     if (!lease) return { ...base, error: BUSY };
     await store.ensureNameSearch?.().catch((error) => log(`name search index: ${error instanceof Error ? error.message : error}`));
     const regions = options.regions?.length ? options.regions : parseRegionList(env.ingestRegions);
-    const setStart = Date.parse(`${getSetInfo(setNumber).start}T00:00:00Z`);
+    const setStart = Date.parse(`${getSetInfo(tracked).start}T00:00:00Z`);
     const since = Math.max(Number.isFinite(setStart) ? setStart : 0, Date.now() - 21 * 86_400_000);
     const fullDeadline = startedAt + env.ingestBudgetSeconds * 1000;
     // Match collection gets at most (100 - CRAWL_SHARE)% of the budget; the player directory crawl has the rest.
     const deadline = startedAt + env.ingestBudgetSeconds * 10 * (100 - env.crawlShare);
     log(`collecting Set ${setNumber} ranked matches from ${regions.join(', ')} into ${store.describe()}`);
 
-    const results = await Promise.allSettled(regions.map((r) => ingestRegion(r, setNumber, since, deadline, log)));
+    const results = await Promise.allSettled(regions.map((r) => ingestRegion(r, tracked, since, deadline, log)));
     const keyError = results.find((r): r is PromiseRejectedResult => r.status === 'rejected' && fatal(r.reason));
     const report: IngestReport = {
       ...base,
@@ -356,11 +364,13 @@ export async function runIngest(options: { regions?: string[]; log?: (message: s
       });
       if (pruned) log(`removed ${pruned} matches older than ${env.retainDays} days`);
     }
-    // LP curves cover the current set.
-    await store.pruneLp(Date.parse(`${getSetInfo(setNumber).start}T00:00:00Z`) || 0).catch(() => 0);
+    // LP curves cover the current set (the pinned one: a set the site moved to by itself removes nothing).
+    await store.pruneLp(Date.parse(`${getSetInfo(tracked).start}T00:00:00Z`) || 0).catch(() => 0);
     // Player totals and set lists nobody has looked at for a month.
     for (const prefix of ['pt:', 'pl:']) await store.pruneKv(prefix, Date.now() - 30 * 86_400_000).catch(() => 0);
     if (pruned || report.regions.some((r) => r.stored > 0)) {
+      // First which patch and set the stored games are on (a new game version is a new patch), then the boards cut by it.
+      await syncPatchState().catch((error) => log(`reading the game versions failed: ${error instanceof Error ? error.message : error}`));
       await refreshStoredBoards().catch((error) => log(`updating the board snapshot failed: ${error instanceof Error ? error.message : error}`));
     }
     if (!keyError) {

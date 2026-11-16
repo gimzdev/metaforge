@@ -422,11 +422,6 @@ export function MatchHistory({
     return summarize(t);
   }, [matches, setNumber, isCurrent]);
   const server = walk.totals ? summarize(walk.totals) : null;
-  // This set's loaded ranked games ([minutes, place]) for the LP curve's estimate before tracking.
-  const games = useMemo(
-    () => matches.flatMap((m): Array<[number, number]> => (m.me && m.queue === RANKED_QUEUE && m.setNumber === setNumber ? [[Math.round(m.datetime / 60_000), m.me.placement]] : [])),
-    [matches, setNumber],
-  );
   const deep = server && (!local || server.games >= local.games) ? server : local;
   const riotGames = isCurrent ? totals?.games ?? 0 : 0;
   const counted = deep?.games ?? 0;
@@ -476,7 +471,7 @@ export function MatchHistory({
   const useRiot = isCurrent && totals;
   const note = counting
     ? isCurrent
-      ? `Counting your ranked games… ${fmt.int(counted)} of ${fmt.int(riotGames)}`
+      ? `Counting ranked games… ${fmt.int(counted)} of ${fmt.int(riotGames)}`
       : `Counting ranked games… ${fmt.int(counted)} so far`
     : partial
       ? `Win rate and average from ${fmt.int(counted)} of ${fmt.int(riotGames)} ranked games`
@@ -614,7 +609,7 @@ export function MatchHistory({
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[24rem_minmax(0,1fr)]">
         {side}
-        <LpCurve points={lp} games={games} setNumber={setNumber} />
+        <LpCurve points={lp} setNumber={setNumber} />
       </div>
       {recent}
       <div className="pt-4">{body}</div>

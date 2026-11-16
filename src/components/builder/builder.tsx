@@ -1,9 +1,10 @@
 'use client';
 
+import { track } from '@vercel/analytics';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
-import { Check, Eraser, FlaskConical, Info, Link2, Save, Search, Trash2, X } from '@/components/icons';
+import { Check, Eraser, FlaskConical, Info, Link2, Save, Search, Swords, Trash2, X } from '@/components/icons';
 import { StarShapes, TraitHex } from '@/components/game/entities';
 import { GameImage } from '@/components/game/game-image';
 import { RichText } from '@/components/game/rich-text';
@@ -385,7 +386,18 @@ function TraitRow({ t }: { t: ActiveTrait }) {
   );
 }
 
-export function BuilderApp({ initialCode }: { initialCode: string | null }) {
+/** A graded comp of the tier list as a board code this builder can open (app/builder/page.tsx makes them). */
+export interface StarterComp {
+  id: string;
+  name: string;
+  grade: string | null;
+  avg: number;
+  code: string;
+}
+
+const STARTER_GRADE: Record<string, string> = { S: 'text-tier-s', A: 'text-tier-a', B: 'text-tier-b', C: 'text-tier-c', D: 'text-tier-d' };
+
+export function BuilderApp({ initialCode, starters = [] }: { initialCode: string | null; starters?: StarterComp[] }) {
   const index = currentIndex();
   const text = useStaticText();
   const initial = useMemo(() => decodeBoard(initialCode, index), [initialCode, index]);
@@ -593,6 +605,20 @@ export function BuilderApp({ initialCode }: { initialCode: string | null }) {
     return filters.length ? `/explorer?f=${encodeFilters(filters)}` : null;
   }, [board, traits]);
 
+  // This board in Patchlab, the balance sandbox (patchlab.metaforge.lol): it opens there as blue, against a sample board,
+  // ready to fight thousands of times. Patchlab reads champions and items by these same keys.
+  const patchlabHref = useMemo(() => {
+    if (empty) return null;
+    const pieces = Object.entries(board).map(([hex, u]) => {
+      const h = Number(hex);
+      return [u.key, Math.min(3, Math.max(1, u.star)), (4 + Math.floor(h / COLS)) * COLS + (h % COLS), ...u.items];
+    });
+    const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, s: `tft${index.data.set.number}`, p: pieces, l: {}, q: {}, n: 5000 }));
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return `https://patchlab.metaforge.lol/#s=j${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+  }, [board, empty, index]);
+
   const selectedUnit = selected !== null ? board[selected] : undefined;
   const selectedChampion = selectedUnit ? index.champion(selectedUnit.key) : undefined;
   const ability = selectedChampion ? text?.abilities[selectedChampion.key] : undefined;
@@ -637,6 +663,19 @@ export function BuilderApp({ initialCode }: { initialCode: string | null }) {
                       <FlaskConical className="size-4" />
                       Explore similar
                     </Link>
+                  )}
+                  {patchlabHref && (
+                    <a
+                      href={patchlabHref}
+                      target="_blank"
+                      rel="noopener"
+                      title="Fight this board thousands of times in Patchlab, the balance sandbox"
+                      onClick={() => track('simulate_click', { from: 'builder' })}
+                      className={cn(TOOL_BUTTON, 'hover:border-lichen/45 hover:text-moon')}
+                    >
+                      <Swords className="size-4" />
+                      Simulate
+                    </a>
                   )}
                   <button
                     type="button"
@@ -695,7 +734,27 @@ export function BuilderApp({ initialCode }: { initialCode: string | null }) {
                   </div>
                 </div>
               </div>
-              {empty && <p className="mt-4 text-center text-sm text-lichen">Click a champion below to add it, or drag it onto a hex. The front line is at the top.</p>}
+              {empty && <p className="mt-4 text-center text-sm text-lichen">Pick a champion below to add it, or drag it onto a hex. The front line is at the top.</p>}
+              {empty && starters.length > 0 && (
+                <div className="mx-auto mt-4 flex max-w-3xl flex-wrap items-center justify-center gap-2">
+                  <span className="eyebrow mr-1 text-fog">Or start from the tier list</span>
+                  {starters.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        load(s.code);
+                        flash(`${s.name} is on the board: its typical board from ranked games.`);
+                      }}
+                      title={`${s.name}: ${s.avg.toFixed(2)} average place. Puts its typical board here.`}
+                      className="inline-flex h-8 items-center gap-2 rounded-full border border-line-strong px-3 text-[13px] font-medium text-lichen transition-colors hover:border-lichen/40 hover:text-moon"
+                    >
+                      {s.grade && <span className={cn('font-display text-sm leading-none', STARTER_GRADE[s.grade])}>{s.grade}</span>}
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* The live region stays mounted (one that appears along with its text is often not read out). */}
               <div role="status">
                 {notice && (
@@ -915,7 +974,7 @@ export function BuilderApp({ initialCode }: { initialCode: string | null }) {
               ) : (
                 <div className="text-sm text-lichen">
                   <div className="text-[15px] font-semibold text-moon">No champion selected</div>
-                  <p className="mt-1">Click a champion on the board to change its stars and items, move it or remove it.</p>
+                  <p className="mt-1">Select a champion on the board to change its stars and items, move it or remove it.</p>
                 </div>
               )}
             </section>

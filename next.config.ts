@@ -22,6 +22,12 @@ const BRAND = {
   MF_BRAND_LEARN: publicAsset(image('learn_banner')),
 };
 
+/**
+ * Whether the installer wrote the link picture (src/app/opengraph-image.jpg, from media/metaforge). Found at build time
+ * like the artwork: without it the layout points og:image at the built-in card (app/opengraph-image-card).
+ */
+const OG_FILE = existsSync(path.join(process.cwd(), 'src', 'app', 'opengraph-image.jpg')) ? '1' : '';
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -41,7 +47,7 @@ const nextConfig: NextConfig = {
     qualities: [75, 90],
     minimumCacheTTL: 2_592_000,
   },
-  env: BRAND,
+  env: { ...BRAND, MF_OG_FILE: OG_FILE },
   async headers() {
     return [
       {

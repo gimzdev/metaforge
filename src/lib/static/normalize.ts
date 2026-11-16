@@ -1,7 +1,7 @@
 import { getSetInfo } from '@/config/game';
 import { slugify } from '@/lib/utils';
 import { emblemToken } from './index';
-import { inferCalcValues, mapLookup, renderRich, splitTraitDescription } from './text';
+import { mapLookup, renderRich, splitTraitDescription } from './text';
 import type { Augment, Champion, ChampionStats, Item, ItemCategory, StaticData, Trait, TraitStyle } from './types';
 
 /* Raw CommunityDragon shapes (only the fields read here). */
@@ -71,6 +71,12 @@ function selectSet(raw: RawCdragon, wanted: number): RawSet {
   const pick = (n: number) =>
     pool.filter((s) => s.number === n).sort((a, b) => inexact(a, n) - inexact(b, n) || (a.mutator ?? '').length - (b.mutator ?? '').length)[0];
   return pick(wanted) ?? pick(Math.max(...pool.map((s) => s.number ?? 0)));
+}
+
+/** Whether the file has an entry for this set (a set's games can arrive before CommunityDragon's file has it). */
+export function hasSet(raw: RawCdragon, wanted: number): boolean {
+  const all: RawSet[] = Array.isArray(raw.setData) && raw.setData.length ? raw.setData : Object.values(raw.sets ?? {});
+  return all.some((s) => s?.number === wanted && !SPECIAL_MODE.test(s.mutator ?? ''));
 }
 
 /** CDragon breakpoint styles: 1 bronze, 2 silver, 3 unique, 4 gold, 5 prismatic. */
@@ -151,6 +157,22 @@ function assignRows(champions: Champion[]) {
   }
 }
 
+/**
+ * The part of CommunityDragon's file normalizeCdragon reads for one set, as CommunityDragon wrote it: the set's entry,
+ * the items and augments it lists (or, without a list, those with the set's prefix) and the components they are built
+ * from. Under 1 MB of 24: what the caches keep, so each server turns it into the site's shape with its own code.
+ */
+export function trimCdragon(raw: RawCdragon, wantedSet: number): RawCdragon {
+  const set = selectSet(raw, wantedSet);
+  const all = (raw.items ?? []).filter((i) => i?.apiName);
+  const prefix = new RegExp(`^(TFT_Item_|TFT${set.number ?? wantedSet}_Item_)`, 'i');
+  const keep = new Set<string>(set.items?.length ? set.items : all.filter((i) => prefix.test(i.apiName)).map((i) => i.apiName));
+  for (const id of set.augments ?? []) keep.add(id);
+  const parts = new Set<string>();
+  for (const i of all) if (keep.has(i.apiName)) for (const c of i.composition ?? []) parts.add(c);
+  return { items: all.filter((i) => keep.has(i.apiName) || parts.has(i.apiName)), setData: [set] };
+}
+
 export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: StaticData['source']): StaticData {
   const set = selectSet(raw, wantedSet);
   const setNumber = set.number ?? wantedSet;
@@ -203,6 +225,11 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
     const n = (c.name ?? c.apiName).trim();
     byName.set(n, [...(byName.get(n) ?? []), c]);
   }
+  // Ability numbers are printed only when the file carries them for the set. Set 18's does not (the game moved to a new
+  // engine): 2 of its 74 champions have values, left over from older sets (Kobuko's heal reads 350/400/475 there, and
+  // 300/350/550 in Riot's 18.6 notes). Where fewer than half the champions have values, none of them is used.
+  const valued = playable.filter((c) => (c.ability?.variables ?? []).some((v) => v?.name)).length;
+  const abilityValues = valued * 2 >= playable.length;
   const champSlug = uniqueSlugger();
   const champions: Champion[] = playable
     .map((c) => {
@@ -216,8 +243,7 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
         name = `${baseName} (${suffix})`;
       }
       const vars = new Map<string, number[] | number>();
-      for (const v of c.ability?.variables ?? []) if (v?.name && v.value !== undefined) vars.set(v.name.toLowerCase(), v.value as number[] | number);
-      const calcs = inferCalcValues(c.ability?.desc ?? '', c.ability?.variables);
+      if (abilityValues) for (const v of c.ability?.variables ?? []) if (v?.name && v.value !== undefined) vars.set(v.name.toLowerCase(), v.value as number[] | number);
       const stats = c.stats ?? {};
       return {
         key: c.apiName.toLowerCase(),
@@ -234,7 +260,10 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
         ability: {
           name: c.ability?.name?.trim() ?? '',
           icon: assetPath(c.ability?.icon),
-          desc: renderRich(c.ability?.desc ?? '', (n) => calcs.get(n.toLowerCase()) ?? vars.get(n.toLowerCase())),
+          // Only numbers the data holds under the placeholder's own name (or its plain data value): totals the game
+          // computes are not published, and matching them to variables by position printed wrong ones (1.0.2 gave
+          // Kobuko's heal as 10/12/20). A number that is missing shows as "…".
+          desc: renderRich(c.ability?.desc ?? '', (n) => vars.get(n.toLowerCase()), { gaps: true }),
         },
         stats: Object.fromEntries(STAT_KEYS.map((k) => [k, num(stats[k])])) as unknown as ChampionStats,
       } satisfies Champion;
@@ -262,7 +291,7 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
       slug: itemSlug(i.name ?? i.apiName, i.apiName),
       name: (i.name ?? i.apiName).trim(),
       icon: assetPath(i.icon),
-      desc: renderRich(i.desc ?? '', mapLookup(i.effects)),
+      desc: renderRich(i.desc ?? '', mapLookup(i.effects), { gaps: true }),
       composition: (i.composition ?? []).filter((c) => itemIndex.has(c)).map((c) => c.toLowerCase()),
       category: itemCategory(i),
       traits: (i.associatedTraits ?? []).map((t) => traitFor(t)?.key).filter((k): k is string => Boolean(k)),
@@ -270,6 +299,14 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
   const { items: catalog, aliases: itemAliases } = dedupeItems(items, traits);
+  // Slugs were handed out before the duplicates were dropped, so the entry that stayed often carried its twin's "-2"
+  // (/items/infinity-edge-2, with /items/infinity-edge a 404). The catalog gets its slugs again: the items a page
+  // lists first, then the rest. The numbered addresses keep answering (see lookup in ./index).
+  const LISTED = new Set<ItemCategory>(['completed', 'component', 'emblem', 'artifact', 'radiant', 'support']);
+  const catalogSlug = uniqueSlugger();
+  for (const item of [...catalog.filter((i) => LISTED.has(i.category)), ...catalog.filter((i) => !LISTED.has(i.category))]) {
+    item.slug = catalogSlug(item.name, item.key);
+  }
 
   const augments: Augment[] = inSet(set.augments)
     .filter((a) => (a.name ?? '').trim())
@@ -277,7 +314,7 @@ export function normalizeCdragon(raw: RawCdragon, wantedSet: number, source: Sta
       key: a.apiName.toLowerCase(),
       name: (a.name ?? a.apiName).trim(),
       icon: assetPath(a.icon),
-      desc: renderRich(a.desc ?? '', mapLookup(a.effects)),
+      desc: renderRich(a.desc ?? '', mapLookup(a.effects), { gaps: true }),
       tier: augmentTier(a),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));

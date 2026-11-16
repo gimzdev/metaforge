@@ -154,7 +154,9 @@ export function statColumns(
       title: opts.avgTitle,
       align: 'right',
       sort: (r) => r.avg,
-      render: (r) => <AvgPlace value={r.avg} className={r.n < (opts.fadeBelow ?? 20) ? 'opacity-60' : undefined} />,
+      // A row built from few games is muted by taking the colour out of its number, not by making it see-through:
+      // at 60% opacity the number fell to 2.8:1 against the card, below what small text needs (4.5:1).
+      render: (r) => <AvgPlace value={r.avg} className={r.n < (opts.fadeBelow ?? 20) ? 'saturate-[0.3]' : undefined} />,
     },
   ];
   if (opts.showDelta !== false) {
@@ -302,13 +304,17 @@ export function ScopeBar({ scope, meta, onChange }: { scope: Scope; meta: Datase
   return (
     <div className={cn('flex flex-wrap items-center gap-2', pending && 'opacity-60')}>
       <Select label="Patch" value={scope.patch} onChange={(e) => update({ patch: e.target.value })}>
-        <option value="all">Whole set ({fmt.compact(meta.total)})</option>
-        {[...meta.patches].reverse().map((p) => (
-          <option key={p.label} value={p.label} disabled={p.boards === 0}>
-            Patch {p.label}
-            {p.label === meta.currentPatch ? ' live' : ''} ({fmt.compact(p.boards)})
-          </option>
-        ))}
+        <option value="all">All patches ({fmt.compact(meta.total)})</option>
+        {/* Matches are kept for a few days, so most older patches hold no boards: those are left out. The live patch and the one selected always show. */}
+        {[...meta.patches]
+          .reverse()
+          .filter((p) => p.boards > 0 || p.label === meta.currentPatch || p.label === scope.patch)
+          .map((p) => (
+            <option key={p.label} value={p.label} disabled={p.boards === 0}>
+              Patch {p.label}
+              {p.label === meta.currentPatch ? ' live' : ''} ({fmt.compact(p.boards)})
+            </option>
+          ))}
       </Select>
       <Select label="Region" value={scope.region} onChange={(e) => update({ region: e.target.value })}>
         <option value="all">All regions</option>

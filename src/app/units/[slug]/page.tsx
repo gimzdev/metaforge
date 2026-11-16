@@ -57,6 +57,8 @@ export default async function UnitPage({ params, searchParams }: { params: Param
   const explorerHref = `/explorer?f=${encodeFilters([{ k: 'unit', id: c.key }])}`;
   const itemMin = Math.max(3, Math.round(stats.summary.boards * 0.01));
   const s = c.stats;
+  // True while the game data carries no number for any ability of the set (Set 18: lib/static/normalize.ts).
+  const noAbilityNumbers = !index.data.champions.some((ch) => ch.ability.desc.some((seg) => seg.k === 'v' && seg.s !== 'gap'));
 
   return (
     <div className="space-y-8">
@@ -150,6 +152,13 @@ export default async function UnitPage({ params, searchParams }: { params: Param
                 <RichText value={c.ability.desc} />
               </div>
             </div>
+            {c.ability.desc.some((seg) => seg.k === 'v' && seg.s === 'gap') && (
+              <p className="mt-3 text-xs leading-relaxed text-fog">
+                {noAbilityNumbers
+                  ? 'The blanks are numbers. The game’s data files hold no numbers for this set’s abilities yet. They show here by themselves when the files have them.'
+                  : 'A blank is a number the game data does not include.'}
+              </p>
+            )}
             {(s.mana !== null || s.initialMana !== null) && (
               <div className="mt-3 text-xs text-fog">Mana {s.initialMana ?? 0} / {s.mana ?? '?'}</div>
             )}

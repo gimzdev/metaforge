@@ -61,6 +61,15 @@ export interface StoreStats {
   lastMatchAt: number | null;
 }
 
+/** Stored ranked matches (those with boards) of one game version on one server: how many, and the first of them. */
+export interface VersionRow {
+  setNumber: number;
+  gameVersion: string;
+  platform: string;
+  first: number;
+  matches: number;
+}
+
 export interface MatchQuery {
   setNumber: number;
   queueId: number;
@@ -120,6 +129,8 @@ export interface Store {
   getBlob(key: string): Promise<Buffer | null>;
   setBlob(key: string, value: Buffer): Promise<void>;
   stats(setNumber: number): Promise<StoreStats>;
+  /** Game versions of the stored matches that have boards, for sets from `minSet` up (lib/patches.ts tells the patches apart by them). */
+  versions(minSet: number): Promise<VersionRow[]>;
 }
 
 /** `p`'s fields, falling back to `prev`'s where missing. */

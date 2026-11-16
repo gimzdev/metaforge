@@ -1,4 +1,4 @@
-import { configuredSetNumber, QUEUES } from '@/config/game';
+import { pinnedSetNumber, QUEUES } from '@/config/game';
 import { cachedAsync } from '@/lib/cache';
 import { shared } from '@/lib/shared-cache';
 import { mapLimit, matchToRecords, queueOf } from '@/lib/ingest';
@@ -137,7 +137,7 @@ function toMatchView(match: MatchDto, puuid: string, legends: Map<string, Legend
 async function saveNewMatches(matches: MatchDto[]) {
   const store = getStore();
   const known = await store.knownMatchIds(matches.map((m) => m.metadata.match_id));
-  const setNumber = configuredSetNumber();
+  const setNumber = pinnedSetNumber();
   const players: PlayerRecord[] = [];
   let failed: unknown = null;
   await mapLimit(matches.filter((m) => !known.has(m.metadata.match_id)), 4, async (match) => {

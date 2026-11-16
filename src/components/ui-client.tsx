@@ -29,12 +29,15 @@ export function Popover({
   anchor,
   children,
   wide = false,
+  label,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   anchor: RefObject<HTMLElement | null>;
   children: ReactNode;
   wide?: boolean;
+  /** What the panel is for, read out when it opens (a dialog needs a name). */
+  label?: string;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -106,6 +109,7 @@ export function Popover({
     <div
       ref={box}
       role="dialog"
+      aria-label={label}
       tabIndex={-1}
       className={cn(
         'fixed z-50 animate-rise rounded-xl border border-line-strong bg-canopy p-4 text-sm shadow-[0_30px_80px_-24px_rgb(0_0_0/0.9)] outline-none',

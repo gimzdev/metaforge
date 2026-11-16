@@ -46,6 +46,16 @@ export function RichText({ value, className }: { value: Rich; className?: string
         if (seg.k === 'v') {
           // Values the game data doesn't publish are left out (older caches may still carry them).
           if (!seg.v) return null;
+          // A number the game data does not hold (lib/static/text.ts): a short blank on the line, like a form's, so
+          // the sentence keeps its shape and nothing looks cut off. Screen readers say "a number". The page says once
+          // what the blanks are. Three underlined figure spaces: they do not break from the full stop or bracket after them.
+          if (seg.s === 'gap') {
+            return (
+              <span key={i} role="img" aria-label="a number" className="underline decoration-fog decoration-1 underline-offset-2">
+                {'\u2007\u2007\u2007'}
+              </span>
+            );
+          }
           return <span key={i} className={cn('num font-semibold', (seg.s && STYLE[seg.s]) || 'text-moon')}>{seg.v}</span>;
         }
         return <Fragment key={i}>{seg.s ? <span className={STYLE[seg.s]}>{seg.v}</span> : seg.v}</Fragment>;

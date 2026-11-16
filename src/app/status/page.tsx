@@ -3,7 +3,7 @@ import { CheckCircle2, CircleAlert, CircleDashed } from '@/components/icons';
 import type { ReactNode } from 'react';
 import { PageHeader, Panel } from '@/components/ui';
 import { RefreshButton } from '@/components/ui-client';
-import { configuredSetNumber, getSetInfo } from '@/config/game';
+import { configuredSetNumber, getSetInfo, setTitle } from '@/config/game';
 import { env } from '@/lib/env';
 import { platformLabel } from '@/lib/riot/regions';
 import { getStatus } from '@/lib/status';
@@ -37,7 +37,7 @@ export default async function StatusPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Data status" description={`What MetaForge has collected for Set ${info.number}: ${info.name}, and whether collection is healthy.`}>
+      <PageHeader title="Data status" description={`What MetaForge has collected for ${setTitle(info)}, and whether collection is healthy.`}>
         <RefreshButton />
       </PageHeader>
 

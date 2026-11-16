@@ -434,7 +434,7 @@ function FilterChip({ filter, open, onOpenChange, onChange, onRemove }: {
           <X className="size-3.5" />
         </button>
       </span>
-      <Popover open={open} onOpenChange={onOpenChange} anchor={anchor}>
+      <Popover open={open} onOpenChange={onOpenChange} anchor={anchor} label={`${d.name} filter`}>
         <div className="mb-4 flex items-center gap-3">
           {d.icon}
           <div className="text-[15px] font-semibold">{d.name}</div>
@@ -527,7 +527,7 @@ function AddFilter({ onAdd, hasAugments, active }: { onAdd: (f: Filter) => void;
         <Plus className="size-4" aria-hidden />
         Add filter
       </button>
-      <Popover open={open} onOpenChange={setOpen} anchor={anchor} wide>
+      <Popover open={open} onOpenChange={setOpen} anchor={anchor} wide label="Add a filter">
         <SearchInput
           value={q}
           onChange={(v) => {

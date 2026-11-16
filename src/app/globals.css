@@ -24,7 +24,8 @@
   --color-moss: #3a342d;
   --color-moon: #f1e9d8;
   --color-lichen: #b8ab94;
-  --color-fog: #857a68;
+  /* The faintest text. 4.5:1 or more on the night, canopy and bark backgrounds (it was 4.36:1 on canopy as #857a68). */
+  --color-fog: #958974;
   --color-wisp: #e2b86a;
   --color-firefly: #e8c35e;
   --color-ember: #d6805a;

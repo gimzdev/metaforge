@@ -2,14 +2,18 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { LucideIcon } from '@/components/icons';
 import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, ExternalLink, Settings2, Sparkles, Undo2, Wrench } from '@/components/icons';
-import { configuredSetNumber, currentPatch, getSetInfo } from '@/config/game';
-import { ESPORTS, ESPORTS_SOURCE, OFFICIAL_LINKS, PATCH_NOTES, type Change, type ChangeGroup, type ChangeKind, type PatchNote } from '@/content/news';
+import { getSetInfo, patchTimeline, setTitle, type TimelinePatch } from '@/config/game';
+import { ESPORTS, ESPORTS_SOURCE, NOTES_SET, OFFICIAL_LINKS, PATCH_NOTES, RIOT_PATCH_NOTES_URL, type Change, type ChangeGroup, type ChangeKind, type PatchNote } from '@/content/news';
+import { SET19 } from '@/content/set19';
 import { AugmentIcon, ChampionIcon, ItemIcon, TraitBadge } from '@/components/game/entities';
+import { AvgPlace } from '@/components/stats/bits';
 import { PageHeader } from '@/components/ui';
 import { HScroll } from '@/components/ui-client';
+import { PATCHLAB_PATCHES, patchlabPatchHref } from '@/lib/patchlab';
 import { param, type SearchParams } from '@/lib/search-params';
-import { getStaticData } from '@/lib/static/load';
+import { getStaticData, shownSetNumber } from '@/lib/static/load';
 import type { StaticData } from '@/lib/static/types';
+import { getMeta, statMap, type StatMap } from '@/lib/stats/service';
 import { cn, fmt, slugify } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
@@ -18,12 +22,11 @@ const selectedNote = (sp: Awaited<SearchParams>) => PATCH_NOTES.find((n) => n.id
 
 export async function generateMetadata({ searchParams }: { searchParams: SearchParams }): Promise<Metadata> {
   const note = selectedNote(await searchParams);
-  const info = getSetInfo(configuredSetNumber());
   const newest = note.id === PATCH_NOTES[0].id;
   return {
     title: newest ? 'Patch notes' : `Patch ${note.label} notes`,
     description: newest
-      ? `Every Set ${info.number} ${info.name} patch sorted into buffs, nerfs and changes, plus the patch calendar and the competitive schedule.`
+      ? `Every ${setTitle(getSetInfo(NOTES_SET), ' ')} patch sorted into buffs, nerfs and changes, plus the patch calendar and the competitive schedule.`
       : note.summary,
     alternates: { canonical: noteHref(note) },
   };
@@ -121,22 +124,29 @@ function Values({ change }: { change: Change }) {
 
 const groupId = (group: ChangeGroup) => `changes-${slugify(group.title)}`;
 
-function Group({ group, resolve }: { group: ChangeGroup; resolve: ReturnType<typeof resolver> }) {
+/** `now`: champion key → [average place, play rate] on the patch these notes are for (only while it is the live patch). */
+function Group({ group, resolve, now }: { group: ChangeGroup; resolve: ReturnType<typeof resolver>; now: StatMap | null }) {
   const targets = byTarget(group);
   return (
     <section id={groupId(group)} className="scroll-mt-32 space-y-3">
       <h3 className="eyebrow flex items-center gap-2 text-fog">
         {group.title}
-        <span className="num font-normal normal-case tracking-normal text-fog/80">{group.changes.length}</span>
+        <span className="num font-normal normal-case tracking-normal text-fog">{group.changes.length}</span>
       </h3>
       <div className="surface overflow-hidden rounded-xl">
         {targets.map(([target, changes]) => {
           const refd = resolve(group, target);
+          const result = refd?.type === 'unit' ? now?.[refd.key] : undefined;
           const name = (
             <span className="flex min-w-0 items-center gap-3">
               <TargetIcon refd={refd} group={group} />
-              <span className="min-w-0 text-[15px] font-semibold leading-snug text-moon transition-colors group-hover/target:text-wisp">
-                {target}
+              <span className="min-w-0">
+                <span className="block text-[15px] font-semibold leading-snug text-moon transition-colors group-hover/target:text-wisp">{target}</span>
+                {result && (
+                  <span className="mt-0.5 block text-xs text-fog">
+                    <AvgPlace value={result[0]} className="text-xs" /> avg, {fmt.pct(result[1], result[1] < 0.1 ? 1 : 0)} played
+                  </span>
+                )}
               </span>
             </span>
           );
@@ -172,26 +182,33 @@ function Group({ group, resolve }: { group: ChangeGroup; resolve: ReturnType<typ
   );
 }
 
-type PatchWindow = ReturnType<typeof getSetInfo>['patches'][number];
 
 const noteHref = (n: PatchNote) => (n.id === PATCH_NOTES[0].id ? '/news' : `/news?p=${n.id}`);
 
-/** The note that covers a calendar patch: its own, or for a lettered mid-patch without one, its base patch's. */
-function noteFor(p: PatchWindow, today: string): PatchNote | undefined {
+/** The note that covers a patch that went live: its own, or for a lettered mid-patch without one, its base patch's. */
+function noteFor(p: TimelinePatch): PatchNote | undefined {
   const own = PATCH_NOTES.find((n) => n.label === p.label);
-  if (own || p.start > today) return own;
+  if (own || p.state === 'scheduled') return own;
   return PATCH_NOTES.find((n) => n.label === p.label.replace(/[a-z]$/, ''));
 }
 
-function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; live?: string; selected: PatchNote; today: string }) {
-  const liveAt = patches.findIndex((p) => p.label === live);
+/**
+ * The set's patches in order: the ones that went live (dated by the calendar or by their first games), then the ones
+ * on Riot's schedule. A scheduled patch is never shown as live by its date: only once its games are collected.
+ */
+function Timeline({ patches, selected }: { patches: TimelinePatch[]; selected: PatchNote }) {
+  const liveAt = patches.findIndex((p) => p.state === 'live');
+  const now = Date.now();
   return (
     <HScroll className="rounded-xl border border-line-strong bg-canopy shadow-[0_20px_50px_-30px_rgb(0_0_0/0.9)]">
       <ol aria-label="Patches this set" className="grid min-w-[52rem] auto-cols-fr grid-flow-col px-3 py-2">
         {patches.map((p, i) => {
-          const note = noteFor(p, today);
-          const future = p.start > today;
-          const isLive = p.label === live;
+          const note = noteFor(p);
+          const future = p.state === 'scheduled';
+          // Two days after the start of its scheduled day (UTC) the day has ended everywhere and the collector has run:
+          // a patch still without games by then is late, and the timeline says so instead of "Scheduled".
+          const late = future && now > Date.parse(`${p.date}T00:00:00Z`) + 48 * 3600 * 1000;
+          const isLive = p.state === 'live';
           const on = note?.id === selected.id && note?.label === p.label;
           const line = (from: number) => (from < liveAt ? 'border-solid border-lichen/45' : 'border-dashed border-lichen/25');
           const dot = on ? (
@@ -213,10 +230,13 @@ function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; 
               <span className={cn('num mt-3 text-[17px] font-semibold leading-none transition-colors', on ? 'text-wisp' : future ? 'text-lichen' : 'text-moon group-hover:text-wisp')}>
                 {p.label}
               </span>
-              <span className={cn('mt-1.5 whitespace-nowrap text-[13px]', on ? 'text-moon' : 'text-lichen')}>
-                {isLive && <><span className="font-medium text-good">Live</span> · </>}
-                {fmt.date(`${p.start}T12:00:00Z`)}
-              </span>
+              <span className={cn('mt-1.5 whitespace-nowrap text-[13px]', on ? 'text-moon' : 'text-lichen')}>{fmt.date(`${p.date}T12:00:00Z`)}</span>
+              {/* Its state on a line of its own: beside the date it ran into the next patch's label on narrower screens. */}
+              {(isLive || future) && (
+                <span className={cn('mt-1 whitespace-nowrap text-[12px] leading-none', isLive ? 'font-medium text-good' : 'text-lichen')}>
+                  {isLive ? 'Live' : late ? 'Not out yet' : 'Scheduled'}
+                </span>
+              )}
             </>
           );
           const box = cn('flex flex-col items-center rounded-lg px-3 pb-3 pt-3', on && 'bg-wisp/[0.09]');
@@ -235,7 +255,18 @@ function Timeline({ patches, live, selected, today }: { patches: PatchWindow[]; 
                   {body}
                 </Link>
               ) : (
-                <div className={box} title={future ? (p.tentative ? 'Planned' : 'Upcoming') : undefined}>{body}</div>
+                <div
+                  className={box}
+                  title={
+                    late
+                      ? 'The date on Riot’s schedule. The patch is not out yet; it shows as live here once its ranked games are collected.'
+                      : future
+                        ? 'The date on Riot’s schedule. It shows as live here once its ranked games are collected.'
+                        : undefined
+                  }
+                >
+                  {body}
+                </div>
               )}
             </li>
           );
@@ -256,23 +287,53 @@ function ExtLink({ href, className, icon = 'size-3.5', children }: { href: strin
 
 export default async function NewsPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
-  const setNumber = configuredSetNumber();
-  const info = getSetInfo(setNumber);
-  const live = currentPatch(setNumber)?.label;
+  const setNumber = await shownSetNumber();
+  const timeline = patchTimeline(setNumber);
+  const live = timeline.find((p) => p.state === 'live');
+  // The written notes, the overview and the circuit are about one set (NOTES_SET).
+  const ownSet = setNumber === NOTES_SET;
+  const written = getSetInfo(NOTES_SET);
+  // A live patch nobody has written notes for yet (they are written from Riot's published notes only): said plainly.
+  const unwritten = live && !(ownSet && noteFor(live)) ? live.label : null;
   const today = new Date().toISOString().slice(0, 10);
   const resolve = resolver(await getStaticData().catch(() => null));
 
   const note = selectedNote(sp);
   const counts = tally(note);
+  // How each changed champion does since: the tier list's own numbers, and only beside the notes of the patch they are from.
+  const meta = await getMeta({}).catch(() => null);
+  const now = meta && meta.meta.total > 0 && meta.scope.patch === note.label ? statMap(meta.units, meta.minN) : null;
+  const changedUnits = now
+    ? note.groups.filter((g) => g.type === 'unit').flatMap((g) => byTarget(g).map(([target]) => resolve(g, target))).filter((r) => r && now[r.key]).length
+    : 0;
   const stateOf = (e: (typeof ESPORTS)[number]) =>
     e.tba || !e.starts || !e.ends ? 'tba' : e.ends < today ? 'done' : e.starts <= today ? 'live' : 'upcoming';
-  const nextEvent = ESPORTS.find((e) => !e.estimated && stateOf(e) === 'upcoming');
+  const nextEvent = ESPORTS.find((e) => stateOf(e) === 'upcoming');
 
   return (
     <div className="space-y-10">
       <div className="space-y-9">
         <PageHeader title="Patch notes" />
-        <Timeline patches={info.patches} live={live} selected={note} today={today} />
+        <Timeline patches={timeline} selected={note} />
+        {setNumber < SET19.number && (
+          <p role="note" className="surface rounded-xl px-5 py-4 text-sm leading-relaxed text-lichen">
+            <span className="font-semibold text-moon">Set {SET19.number}: {SET19.name}</span> is on the PBE on November 17 and live with patch 19.1 on December 1.{' '}
+            <Link href="/set-19" className="font-medium text-wisp hover:underline">Champions, traits and unlocks</Link>
+          </p>
+        )}
+        {unwritten && (
+          <p role="note" className="surface rounded-xl px-5 py-4 text-sm leading-relaxed text-lichen">
+            <span className="font-semibold text-moon">Patch {unwritten} is live.</span> MetaForge has no notes for it yet. Its changes are in{' '}
+            <ExtLink href={RIOT_PATCH_NOTES_URL} className="inline-flex items-center gap-1 font-medium text-wisp">Riot&apos;s patch notes</ExtLink>
+            . The tier lists already count its games. Below: the {note.label} notes{ownSet ? '' : `, from ${setTitle(written)}`}.
+          </p>
+        )}
+        {!ownSet && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-lichen">{setTitle(written)}: the patches with notes here</h2>
+            <Timeline patches={patchTimeline(NOTES_SET)} selected={note} />
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-10 border-t hairline pt-10 lg:grid-cols-[minmax(0,1fr)_15rem] xl:gap-14">
@@ -301,7 +362,12 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
             )}
           </header>
 
-          {note.groups.map((g) => <Group key={g.title} group={g} resolve={resolve} />)}
+          {changedUnits > 0 && (
+            <p className="text-[13px] leading-relaxed text-fog">
+              Under each champion: its average place and the share of boards it is played on, on patch {note.label}.
+            </p>
+          )}
+          {note.groups.map((g) => <Group key={g.title} group={g} resolve={resolve} now={now} />)}
         </article>
 
         <aside className="hidden lg:block">
@@ -324,25 +390,37 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
             </nav>
             <div className="space-y-2.5 border-t hairline pt-5 text-sm">
               <ExtLink href={note.source.url} className="flex items-center justify-between gap-3">Riot&apos;s full notes</ExtLink>
-              <Link href="/guides#set-mechanics" className="group flex items-center justify-between gap-3 text-lichen transition-colors hover:text-wisp">
-                How {info.name} works
-                <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
-              </Link>
+              {PATCHLAB_PATCHES.has(note.id) && (
+                <ExtLink href={patchlabPatchHref(note.id)} className="flex items-center justify-between gap-3">Simulated in Patchlab</ExtLink>
+              )}
+              {ownSet && (
+                <Link href="/guides#set-mechanics" className="group flex items-center justify-between gap-3 text-lichen transition-colors hover:text-wisp">
+                  How {written.name} works
+                  <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
+                </Link>
+              )}
             </div>
           </div>
         </aside>
       </div>
 
-      <ExtLink href={note.source.url} className="inline-flex items-center gap-1.5 text-sm font-medium lg:hidden">
-        Riot&apos;s full {note.label} notes
-      </ExtLink>
+      <div className="flex flex-wrap gap-x-6 gap-y-2 lg:hidden">
+        <ExtLink href={note.source.url} className="inline-flex items-center gap-1.5 text-sm font-medium">
+          Riot&apos;s full {note.label} notes
+        </ExtLink>
+        {PATCHLAB_PATCHES.has(note.id) && (
+          <ExtLink href={patchlabPatchHref(note.id)} className="inline-flex items-center gap-1.5 text-sm font-medium">
+            {note.label}, simulated in Patchlab
+          </ExtLink>
+        )}
+      </div>
 
       <section className="space-y-5 border-t hairline pt-10">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
           <div>
             <h2 className="text-[1.6rem] leading-tight text-moon">Competitive season</h2>
             <p className="mt-1.5 text-sm text-lichen">
-              The {info.name} circuit from the cups to the Tactician&apos;s Crown, then the Set 19 launch and the Vegas Open.
+              The {written.name} circuit from the cups to the Tactician&apos;s Crown, then the Set 19 launch and the Vegas Open.
               {nextEvent ? ` Next up: ${nextEvent.name}, ${nextEvent.dates}.` : ''}
             </p>
           </div>
@@ -356,12 +434,13 @@ export default async function NewsPage({ searchParams }: { searchParams: SearchP
             const next = e === nextEvent;
             const current = state === 'live' || next;
             const tone = {
-              done: { row: 'opacity-50', tag: 'text-fog', name: 'text-lichen', dates: 'text-fog', detail: 'text-fog' },
+              // A finished event is dimmer by its colours and struck through, not see-through: at half opacity its text fell to 2.3:1.
+              done: { row: '', tag: 'text-fog', name: 'text-lichen', dates: 'text-fog', detail: 'text-fog' },
               live: { row: 'bg-white/[0.035]', tag: 'text-moon', name: 'text-moon', dates: 'text-moon', detail: 'text-lichen' },
               upcoming: { row: next ? 'bg-white/[0.035]' : '', tag: next ? 'text-moon' : 'text-fog', name: 'text-moon', dates: 'text-moon', detail: 'text-lichen' },
               tba: { row: '', tag: 'text-fog', name: 'text-lichen', dates: 'italic text-fog', detail: 'text-fog' },
             }[state];
-            const tag = state === 'done' ? 'Done' : state === 'live' ? (e.estimated ? 'Open' : 'Live now') : state === 'tba' ? 'TBA' : next ? 'Next' : e.estimated ? 'Expected' : 'Upcoming';
+            const tag = state === 'done' ? 'Done' : state === 'live' ? 'Live now' : state === 'tba' ? 'TBA' : next ? 'Next' : 'Upcoming';
             return (
               <li
                 key={e.name}

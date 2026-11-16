@@ -840,7 +840,8 @@ export function ExplorerApp({ initial, initialFilters, initialTab, initialHeld =
         />
       )}
       {tab === 'items' && <ChipRow all="All items" options={ITEM_GROUPS} value={itemGroup} onChange={setItemGroup} />}
-      {tab === 'traits' && <ChipRow all="All traits" options={TRAIT_KINDS} value={traitKind} onChange={setTraitKind} />}
+      {/* Only the kinds this set's traits have: a set whose origins are not known yet has no Origins and Classes to pick. */}
+      {tab === 'traits' && <ChipRow all="All traits" options={TRAIT_KINDS.filter((k) => index.data.traits.some((t) => t.kind === k.id))} value={traitKind} onChange={setTraitKind} />}
 
       {/* The rows fade with the summary: a row clicked far down the table changes the filters out of sight. */}
       <div className={cn('transition-opacity', outdated && 'opacity-70')} aria-busy={query.fetching || undefined}>

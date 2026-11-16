@@ -8,6 +8,7 @@ import { BoardPreview } from '@/components/game/board-preview';
 import { GameImage } from '@/components/game/game-image';
 import { AvgPlace, CompRowCard, GRADE_TEXT } from '@/components/stats/bits';
 import { ScopeBar } from '@/components/stats/table';
+import { SupportNote } from '@/components/support';
 import { Chip, Segmented } from '@/components/ui';
 import { currentIndex } from '@/lib/static';
 import type { ItemCategory } from '@/lib/static/types';
@@ -279,6 +280,11 @@ export function MetaView({ data }: { data: MetaViewData }) {
           </button>
         ) : null}
       </section>
+
+      <SupportNote>
+        These grades come from {fmt.compact(data.meta.total)} high-elo boards MetaForge collects around the clock. It’s free, with no ads and no
+        paywall.
+      </SupportNote>
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-3">

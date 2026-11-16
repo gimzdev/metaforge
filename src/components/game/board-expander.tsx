@@ -8,7 +8,8 @@ type Units = Array<{ id: string; star: number; items: string[]; freq: number }>;
 export function TypicalBoardPanel({ units, children }: { units: Units; children: ReactNode }) {
   return (
     <Panel title="Typical board">
-      <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:gap-8">
+      {/* The board sizes its hexes by this container's width: full size beside the list, the whole board on a phone. */}
+      <div className="@container flex flex-col gap-6 lg:flex-row lg:items-center lg:gap-8">
         <div className="min-w-0 flex-1">{children}</div>
         <div className="shrink-0 lg:border-l lg:border-line lg:pl-8">
           <BoardPreview units={units} px={54} />

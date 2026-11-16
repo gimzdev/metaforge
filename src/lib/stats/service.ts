@@ -1,4 +1,5 @@
-import { configuredSetNumber } from '@/config/game';
+import { calendarSignature } from '@/config/game';
+import { shownSetNumber } from '@/lib/static/load';
 import { TtlCache, singleton } from '@/lib/cache';
 import { shared, STATS_TAG } from '@/lib/shared-cache';
 import { getDataset, type Dataset } from './dataset';
@@ -33,8 +34,25 @@ const FRESH_MS = 10_000;
 /** Fallback age of a shared result, in seconds; collection runs refresh them sooner. */
 const SHARED_FOR = 6 * 3600;
 const hasReadError = (r: unknown) => Boolean(r && typeof r === 'object' && (r as { meta?: { error?: string | null } }).meta?.error);
-const share = <A extends unknown[], R>(name: string, fn: (...args: A) => Promise<R>) =>
-  shared(fn, ['stats', name, `set${configuredSetNumber()}`], { tags: [STATS_TAG], revalidate: SHARED_FOR, keep: (r) => !hasReadError(r) });
+/**
+ * Results are kept per set and per calendar: the data cache outlives a deploy, so without the calendar's dated patches
+ * in the key an edit to them (src/config/game.ts) would keep answering with the old patch labels until the next
+ * collection run. The set is the one shown when the result is asked for (the set of the game data in use): the site
+ * moves to a new set by itself (lib/patches.ts), and the first view after that reads the new set's results, never the
+ * old set's.
+ */
+const share = <A extends unknown[], R>(name: string, fn: (...args: A) => Promise<R>) => {
+  const bySet = new Map<number, (...args: A) => Promise<R>>();
+  return async (...args: A): Promise<R> => {
+    const set = await shownSetNumber();
+    let cached = bySet.get(set);
+    if (!cached) {
+      cached = shared(fn, ['stats', name, `set${set}`, calendarSignature(set)], { tags: [STATS_TAG], revalidate: SHARED_FOR, keep: (r) => !hasReadError(r) });
+      bySet.set(set, cached);
+    }
+    return cached(...args);
+  };
+};
 
 const results = () => singleton('stats-results', () => new TtlCache<unknown>(150, 5 * 60_000));
 

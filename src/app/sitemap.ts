@@ -13,7 +13,7 @@ const LISTED_ITEMS = new Set<ItemCategory>(['completed', 'component', 'emblem', 
 /** Site pages, champions, traits, items and the graded comps. Player pages stay out: there are far too many. */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = env.appUrl;
-  const pages = ['', '/meta', '/explorer', '/builder', '/leaderboard', '/news', '/guides', '/units', '/items', '/traits'];
+  const pages = ['', '/meta', '/explorer', '/builder', '/leaderboard', '/news', '/guides', '/units', '/items', '/traits', '/set-19'];
   const out: MetadataRoute.Sitemap = pages.map((p) => ({ url: `${base}${p}`, changeFrequency: 'hourly', priority: p === '' ? 1 : 0.8 }));
   // Earlier patch notes; the newest are /news itself.
   for (const n of PATCH_NOTES.slice(1)) out.push({ url: `${base}/news?p=${n.id}`, changeFrequency: 'monthly', priority: 0.4 });

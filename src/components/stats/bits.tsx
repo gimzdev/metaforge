@@ -226,7 +226,8 @@ export function CompRowCard({
   return (
     <Link
       href={`/comps/${comp.id}`}
-      aria-label={`${comp.name}: ${fmt.place(comp.avg)} average place, ${fmt.pct(comp.top4, 0)} top 4`}
+      // One line from 1180 px: narrower than that, the units column of the wide layout gets under 300 px and a board
+      // of nine wraps into four or five rows, so the card stays stacked (name, units, figures).
       className={cn(
         'surface group/comp grid rounded-xl px-4 py-4 transition-colors hover:border-lichen/35 sm:px-5',
         'grid-cols-[minmax(0,1fr)_auto] gap-x-4',
@@ -235,9 +236,9 @@ export function CompRowCard({
           : "[grid-template-areas:'name_bars'_'units_units'_'stats_toggle']",
         onToggleBoard
           ? showBoard
-            ? "lg:grid-cols-[13rem_minmax(0,1fr)_auto_auto_auto] lg:items-center lg:gap-x-8 lg:[grid-template-areas:'name_units_board_board_toggle']"
-            : "lg:grid-cols-[13rem_minmax(0,1fr)_auto_auto_auto] lg:items-center lg:gap-x-8 lg:[grid-template-areas:'name_units_stats_bars_toggle']"
-          : "lg:grid-cols-[13rem_minmax(0,1fr)_auto_auto] lg:items-center lg:gap-x-8 lg:[grid-template-areas:'name_units_stats_bars']",
+            ? "min-[1180px]:grid-cols-[13rem_minmax(0,1fr)_auto_auto_auto] min-[1180px]:items-center min-[1180px]:gap-x-8 min-[1180px]:[grid-template-areas:'name_units_board_board_toggle']"
+            : "min-[1180px]:grid-cols-[13rem_minmax(0,1fr)_auto_auto_auto] min-[1180px]:items-center min-[1180px]:gap-x-8 min-[1180px]:[grid-template-areas:'name_units_stats_bars_toggle']"
+          : "min-[1180px]:grid-cols-[13rem_minmax(0,1fr)_auto_auto] min-[1180px]:items-center min-[1180px]:gap-x-8 min-[1180px]:[grid-template-areas:'name_units_stats_bars']",
       )}
     >
       <div className="min-w-0 [grid-area:name]">
@@ -252,17 +253,19 @@ export function CompRowCard({
         <p className="mt-1.5 truncate text-[13px] text-fog">{traits}</p>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-x-1 gap-y-4 pt-1.5 [grid-area:units] lg:mt-0">
+      <div className="mt-4 flex flex-wrap gap-x-1 gap-y-4 pt-1.5 [grid-area:units] min-[1180px]:mt-0">
         {comp.units.map((u) => (
           <ChampionIcon key={u.id} id={u.id} size="ml" star={u.star} items={u.items} link={false} even />
         ))}
       </div>
 
       {showBoard ? (
-        <div className="mt-4 min-w-0 [grid-area:board] lg:mt-0">{board}</div>
+        // A container while the card is stacked, so the board fits a narrow card; in the one-line layout its columns
+        // take the board's own width, which a container would report as zero.
+        <div className="@container mt-4 min-w-0 [grid-area:board] min-[1180px]:mt-0 min-[1180px]:[container-type:normal]">{board}</div>
       ) : (
         <>
-          <dl className="mt-4 grid grid-cols-4 gap-x-4 [grid-area:stats] lg:mt-0 lg:w-[16.5rem]">
+          <dl className="mt-4 grid grid-cols-4 gap-x-4 [grid-area:stats] min-[1180px]:mt-0 min-[1180px]:w-[16.5rem]">
             <Figure label="Avg place">
               <AvgPlace value={comp.avg} />
             </Figure>
@@ -271,7 +274,7 @@ export function CompRowCard({
             <Figure label="Played">{fmt.pct(comp.freq, comp.freq < 0.1 ? 1 : 0)}</Figure>
           </dl>
 
-          <div className="self-start [grid-area:bars] lg:self-center" title="Share of finishes from 1st (left) to 8th (right)">
+          <div className="self-start [grid-area:bars] min-[1180px]:self-center" title="Share of finishes from 1st (left) to 8th (right)">
             <PlacementBars placements={comp.placements} height={26} className="w-24" />
             <div className="mt-1.5 flex justify-between text-[10px] leading-none text-fog">
               <span>1st</span>
@@ -282,7 +285,7 @@ export function CompRowCard({
       )}
 
       {onToggleBoard && (
-        <div className="mt-4 self-center justify-self-end [grid-area:toggle] lg:mt-0">
+        <div className="mt-4 self-center justify-self-end [grid-area:toggle] min-[1180px]:mt-0">
           <BoardButton open={showBoard} onClick={onToggleBoard} />
         </div>
       )}

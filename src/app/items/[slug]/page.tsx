@@ -100,6 +100,9 @@ export default async function ItemPage({ params, searchParams }: { params: Param
             <div className="text-sm text-lichen">
               <RichText value={item.desc} />
             </div>
+            {item.desc.some((seg) => seg.k === 'v' && seg.s === 'gap') && (
+              <p className="mt-3 text-xs leading-relaxed text-fog">A blank is a number the game data does not include.</p>
+            )}
             {item.unique && <div className="mt-3 text-xs text-fog">Unique: one per champion.</div>}
             {item.traits.length > 0 && (
               <div className="mt-4 flex flex-wrap gap-2">

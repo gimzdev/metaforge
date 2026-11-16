@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { env } from '@/lib/env';
 import { nameMatch } from '@/lib/utils';
-import { dedupePlayers, mergePlayer, type BoardRecord, type LpPoint, type LpSeen, type MatchQuery, type MatchRecord, type PlayerRecord, type Store, type StoreStats, type StoredMatch } from './types';
+import { dedupePlayers, mergePlayer, type BoardRecord, type LpPoint, type LpSeen, type MatchQuery, type MatchRecord, type PlayerRecord, type Store, type StoreStats, type StoredMatch, type VersionRow } from './types';
 
 /** Read just the match header of a stored line (the "m" object is always written first). */
 function parseHead(raw: string): MatchRecord | null {
@@ -497,5 +497,20 @@ export class FileStore implements Store {
     await this.init();
     await this.refreshIndex();
     return this.summary.get(setNumber) ?? emptyStats();
+  }
+
+  async versions(minSet: number): Promise<VersionRow[]> {
+    await this.init();
+    const rows = new Map<string, VersionRow>();
+    await this.eachLine(0, (raw) => {
+      const m = parseHead(raw);
+      if (!m || !m.boardsStored || m.setNumber < minSet) return;
+      const id = `${m.setNumber}|${m.gameVersion}|${m.platform}`;
+      const row = rows.get(id) ?? { setNumber: m.setNumber, gameVersion: m.gameVersion ?? '', platform: m.platform, first: m.datetime, matches: 0 };
+      row.first = Math.min(row.first, m.datetime);
+      row.matches++;
+      rows.set(id, row);
+    });
+    return [...rows.values()];
   }
 }

@@ -76,9 +76,16 @@ function candidateNames(name: string): string[] {
   return out;
 }
 
-/** Look a placeholder up by name or hashed name, trying the calc's underlying data value last. */
-function lookupAny(name: string, lookup: VarLookup) {
-  for (const candidate of candidateNames(name)) {
+/** What a calc's name is reduced to when looking for its data value ("MagicDamageCalc2" and "ModifiedMagicDamage" both give "magicdamage"). */
+const stemOf = (name: string) => name.replace(/^TFT\d*_/i, '').replace(CALC_PREFIX, '').replace(CALC_SUFFIX, '').toLowerCase();
+
+/**
+ * Look a placeholder up by name or hashed name, trying the calc's underlying data value last. `exact` keeps to the
+ * placeholder's own name: for a description whose placeholders share one stem, the data value can stand for one of
+ * them at most, and nothing says which.
+ */
+function lookupAny(name: string, lookup: VarLookup, exact = false) {
+  for (const candidate of exact ? [name] : candidateNames(name)) {
     const direct = lookup(candidate);
     if (direct !== null && direct !== undefined) return direct;
     const hashed = lookup(`{${fnv1a(candidate)}}`);
@@ -87,66 +94,15 @@ function lookupAny(name: string, lookup: VarLookup) {
   return undefined;
 }
 
-const CALC_TOKEN = /(Calc|Calculation)\d*$|^(Modified|Tooltip|Total|Calculated)[A-Z]/;
-
-/**
- * Newer spells print totals through tooltip calcs ("@MagicDamageCalc1@") CommunityDragon doesn't publish, while the base
- * numbers are in the ability's variables (often hashed). Map each unresolved calc, in text order, to the next unused
- * per-star amount (at least 10 and growing with star level), which the tooltip shows at base stats. Percents are left alone.
- */
-export function inferCalcValues(desc: string, variables: Array<{ name?: string; value?: unknown }> | null | undefined): Map<string, number[]> {
-  const table = new Map<string, number[]>();
-  const order: string[] = [];
-  for (const v of variables ?? []) {
-    if (!v?.name || !Array.isArray(v.value) || !v.value.every((x) => typeof x === 'number')) continue;
-    const key = v.name.toLowerCase();
-    if (!table.has(key)) {
-      table.set(key, v.value as number[]);
-      order.push(key);
-    }
-  }
-  const out = new Map<string, number[]>();
-  if (!table.size || !desc) return out;
-  const keyFor = (name: string) => {
-    for (const candidate of candidateNames(name)) {
-      const lower = candidate.toLowerCase();
-      if (table.has(lower)) return lower;
-      const hashed = `{${fnv1a(candidate)}}`;
-      if (table.has(hashed)) return hashed;
-    }
-    return null;
-  };
-  const used = new Set<string>();
-  const pending: Array<{ name: string; percent: boolean }> = [];
-  for (const m of desc.matchAll(/@([^@<>\n]{1,80})@(%?)/g)) {
-    const name = m[1].trim().split(/[\s*/]/)[0];
-    const key = keyFor(name);
-    if (key) used.add(key);
-    else pending.push({ name, percent: m[2] === '%' });
-  }
-  const stars = (v: number[]) => (v.length >= 4 ? v.slice(1, 4) : v.slice(0, 3));
-  const amount = (v: number[]) => {
-    const s3 = stars(v);
-    return s3.length === 3 && s3[0] >= 10 && s3[0] < s3[1] && s3[1] < s3[2];
-  };
-  const pool = order.filter((k) => !used.has(k) && amount(table.get(k)!));
-  for (const t of pending) {
-    const key = t.name.toLowerCase();
-    if (out.has(key) || t.percent || !CALC_TOKEN.test(t.name)) continue;
-    const next = pool.shift();
-    if (!next) break;
-    out.set(key, table.get(next)!);
-  }
-  return out;
-}
-
 /** Resolve "@Name*100@"-style expressions. Arrays are per-star values. */
-function resolveVar(expr: string, lookup: VarLookup): RichSeg | null {
-  const match = /^\s*([^*/\s]+)\s*(?:([*/])\s*(-?\d+(?:\.\d+)?))?\s*$/.exec(expr);
+const VAR_EXPR = /^\s*([^*/\s]+)\s*(?:([*/])\s*(-?\d+(?:\.\d+)?))?\s*$/;
+
+function resolveVar(expr: string, lookup: VarLookup, exact: (name: string) => boolean): RichSeg | null {
+  const match = VAR_EXPR.exec(expr);
   const name = match?.[1] ?? expr;
   const op = match?.[2];
   const operand = match?.[3] !== undefined ? Number(match[3]) : undefined;
-  const raw = lookupAny(name, lookup);
+  const raw = lookupAny(name, lookup, exact(name));
   if (raw === null || raw === undefined) return null;
   if (Array.isArray(raw)) {
     // CDragon star arrays: index 1..3 hold the 1★..3★ values.
@@ -161,8 +117,24 @@ function resolveVar(expr: string, lookup: VarLookup): RichSeg | null {
 
 const TOKEN_RE = /<(\/?)([a-zA-Z][\w.]*)[^>]*?(\/?)>|%i:([A-Za-z0-9_]+)%|@([^@<>\n]{1,80})@/g;
 
-export function renderRich(input: string | null | undefined, lookup: VarLookup = () => undefined): RichText {
+/** The mark that stands for a number the game data does not hold (see `gaps` below). */
+const GAP: RichSeg = { k: 'v', v: '…', s: 'gap' };
+
+/**
+ * `gaps`: a value the data does not hold shows as "…" instead of vanishing. Champion abilities ask for it: without
+ * their numbers the sentences read "gain Shield for seconds".
+ */
+export function renderRich(input: string | null | undefined, lookup: VarLookup = () => undefined, opts: { gaps?: boolean } = {}): RichText {
   if (!input) return [];
+  // Placeholders that share a stem with another one of this text ("MagicDamageCalc1" and "MagicDamageCalc2"): only
+  // their own names are looked up, so two different totals never both print the one "MagicDamage" value.
+  const stems = new Map<string, Set<string>>();
+  for (const m of input.matchAll(/@([^@<>\n]{1,80})@/g)) {
+    const name = VAR_EXPR.exec(m[1])?.[1] ?? m[1];
+    const stem = stemOf(name);
+    stems.set(stem, (stems.get(stem) ?? new Set()).add(name.toLowerCase()));
+  }
+  const exact = (name: string) => (stems.get(stemOf(name))?.size ?? 0) > 1;
   const out: RichSeg[] = [];
   const styles: string[] = [];
   const style = () => styles[styles.length - 1];
@@ -199,13 +171,42 @@ export function renderRich(input: string | null | undefined, lookup: VarLookup =
       const key = m[4].toLowerCase();
       out.push({ k: 'i', v: ICON_LABELS[key] ?? humanizeVar(m[4].replace(/^scale/i, '')) });
     } else if (m[5]) {
-      const seg = resolveVar(m[5], lookup);
-      if (!seg) continue; // unknown value: leave it out instead of printing its internal name
+      const seg = resolveVar(m[5], lookup, exact);
+      if (!seg) {
+        // Unknown value: never its internal name. Left out, or marked where the caller asked for the mark.
+        if (opts.gaps) out.push({ ...GAP });
+        continue;
+      }
       const s = style();
       out.push(s ? { ...seg, s } : seg);
     }
   }
   pushText(decodeEntities(source.slice(cursor)));
+
+  // A mark alone on its line, or trailing a finished sentence, stands for something only a running game fills in (a
+  // list, a tracker with no label): out.
+  if (opts.gaps) {
+    const isGap = (seg: RichSeg) => seg.k === 'v' && seg.s === 'gap';
+    const blank = (seg: RichSeg) => seg.k === 't' && !(seg.v ?? '').trim();
+    for (let start = 0; start <= out.length; ) {
+      let end = start;
+      while (end < out.length && out[end].k !== 'n') end++;
+      const line = out.slice(start, end);
+      if (line.some(isGap) && line.every((seg) => isGap(seg) || blank(seg))) {
+        out.splice(start, end - start);
+        end = start;
+      } else {
+        let last = end - 1;
+        while (last > start && blank(out[last])) last--;
+        const before = out[last - 1];
+        if (last > start && isGap(out[last]) && before.k === 't' && /[.!?]\s*$/.test(before.v ?? '')) {
+          out.splice(last, 1);
+          end--;
+        }
+      }
+      start = end + 1;
+    }
+  }
 
   // Tidy the gaps a dropped value leaves behind ("dealing  damage", "( )", " .").
   for (let i = 0; i < out.length; i++) {

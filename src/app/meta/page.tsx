@@ -2,17 +2,23 @@ import type { Metadata } from 'next';
 import { MetaView } from '@/components/meta-view';
 import { NoData } from '@/components/stats/no-data';
 import { PageHeader } from '@/components/ui';
+import { currentPatch } from '@/config/game';
 import { scopeFrom, type SearchParams } from '@/lib/search-params';
+import { shownSetNumber } from '@/lib/static/load';
 import { getMeta, metaViewData } from '@/lib/stats/service';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
-  title: 'Meta report',
-  description: 'TFT comp tier list plus champion, item and trait tier lists from ranked games on the live patch.',
-  // ?region= and ?patch= views are variants of this page.
-  alternates: { canonical: '/meta' },
-};
+/** The live patch in the title, as people search it: "TFT comps tier list, patch 18.6". */
+export async function generateMetadata(): Promise<Metadata> {
+  const patch = currentPatch(await shownSetNumber())?.label;
+  return {
+    title: `TFT comps tier list${patch ? `, patch ${patch}` : ''}`,
+    description: `TFT comp tier list${patch ? ` for patch ${patch}` : ''}, plus champion, item and trait tier lists, from ranked games on the live patch.`,
+    // ?region= and ?patch= views are variants of this page.
+    alternates: { canonical: '/meta' },
+  };
+}
 
 export default async function MetaPage({ searchParams }: { searchParams: SearchParams }) {
   const data = await getMeta(scopeFrom(await searchParams));

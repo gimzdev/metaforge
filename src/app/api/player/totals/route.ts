@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { configuredSetNumber } from '@/config/game';
+import { shownSetNumber } from '@/lib/static/load';
 import { failure, json, limited, playerQuery } from '@/lib/http';
 import { advanceTotals } from '@/lib/player-totals';
 import { publicTotals } from '@/lib/totals';
@@ -11,7 +11,7 @@ export const maxDuration = 30;
 export async function GET(req: NextRequest) {
   const p = playerQuery(req);
   if (p instanceof NextResponse) return p;
-  const current = configuredSetNumber();
+  const current = await shownSetNumber();
   const set = p.q.has('set') ? Number(p.q.get('set')) : current;
   if (!Number.isInteger(set) || set < 1 || set > current) return NextResponse.json({ error: 'Unknown set' }, { status: 400 });
   const blocked = limited(req, 'totals', 90);

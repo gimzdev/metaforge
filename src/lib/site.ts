@@ -16,3 +16,6 @@ export const NAV = [
   { href: '/leaderboard', label: 'Ladder', icon: Trophy },
   { href: '/guides', label: 'Guides', icon: BookOpen },
 ] as const;
+
+/** Where people can support MetaForge: the header, the footer and the notes in components/support.tsx link here. */
+export const PATREON = 'https://www.patreon.com/gimzdev';

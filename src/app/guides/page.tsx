@@ -4,9 +4,10 @@ import { Coins, Compass, Gauge, LayoutGrid, Shuffle, Swords } from '@/components
 import { ItemIcon } from '@/components/game/entities';
 import { PageHeader } from '@/components/ui';
 import { Expandable } from '@/components/ui-client';
-import { SET_OVERVIEW } from '@/content/news';
+import { NOTES_SET, SET_OVERVIEW } from '@/content/news';
 import { brand } from '@/lib/site';
-import { getStaticData } from '@/lib/static/load';
+import { getSetInfo } from '@/config/game';
+import { getStaticData, shownSetNumber } from '@/lib/static/load';
 import type { Item } from '@/lib/static/types';
 import { getMeta } from '@/lib/stats/service';
 import { itemMinSample } from '@/lib/stats/tiers';
@@ -14,11 +15,15 @@ import { cn, fmt, placementTone, toneText } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
-  title: 'Guides',
-  description: 'TFT fundamentals, the full item recipe chart for the current set, emblems, and how Enchanted Wilds mechanics work.',
-  alternates: { canonical: '/guides' },
-};
+// The mechanics section is written for one set (NOTES_SET): it shows, and the description names it, only while that set is the one shown.
+export async function generateMetadata(): Promise<Metadata> {
+  const own = (await shownSetNumber()) === NOTES_SET;
+  return {
+    title: 'Guides',
+    description: `TFT fundamentals, the full item recipe chart for the current set${own ? `, emblems, and how ${getSetInfo(NOTES_SET).name} mechanics work.` : ' and emblems.'}`,
+    alternates: { canonical: '/guides' },
+  };
+}
 
 const FUNDAMENTALS = [
   {
@@ -105,11 +110,14 @@ export default async function GuidesPage() {
   const otherEmblems = emblems.filter((e) => !spatula.includes(e) && !pan.includes(e));
   const partner = (e: Item, base: string) => e.composition.find((c) => !(byKey.get(c)?.name.toLowerCase() ?? '').includes(base)) ?? e.composition[1];
 
+  // The written mechanics are one set's: not shown as another set's.
+  const ownSet = data.set.number === NOTES_SET;
+
   return (
     <div className="space-y-12">
       <PageHeader title="Guides" art={brand.learn} />
 
-      <Expandable id="fundamentals" title="Fundamentals" hint={`Economy, leveling, positioning, how ${data.set.name} works and how to read the stats.`}>
+      <Expandable id="fundamentals" title="Fundamentals" hint={`Economy, leveling, positioning${ownSet ? `, how ${data.set.name} works` : ''} and how to read the stats.`}>
         <section className="space-y-4">
           <h2 className={H2}>Fundamentals</h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -123,7 +131,7 @@ export default async function GuidesPage() {
           </div>
         </section>
 
-        <section id="set-mechanics" className="scroll-mt-24 space-y-4">
+        {ownSet && <section id="set-mechanics" className="scroll-mt-24 space-y-4">
           <div>
             <h2 className={H2}>{data.set.name} mechanics</h2>
             <p className="mt-1 text-sm text-lichen">{SET_OVERVIEW.intro}</p>
@@ -142,7 +150,7 @@ export default async function GuidesPage() {
             follows these rules: the Avatar&apos;s doubled trait, one Avatar per board, and the Elder Dragon&apos;s two
             slots and Riftbeast bonus.
           </p>
-        </section>
+        </section>}
 
         <section className="space-y-3">
           <h2 className={H2}>Reading MetaForge stats</h2>

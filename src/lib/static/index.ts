@@ -15,8 +15,13 @@ export interface StaticIndex<D extends StaticLite = StaticLite> {
 const memo = new WeakMap<object, StaticIndex>();
 const compact = (s: string) => s.replace(/[^a-z0-9]/g, '');
 
-/** Exact key or slug first, then a punctuation-insensitive slug ("kha-zix" finds "khazix"). */
-function lookup<T extends { key: string; slug?: string }>(list: T[]) {
+/**
+ * Exact key or slug first, then a punctuation-insensitive slug ("kha-zix" finds "khazix"). For items only (`counters`),
+ * then the same name with or without a counter: item pages lived at /items/infinity-edge-2 before their slugs were
+ * cleaned up, so "infinity-edge-2" finds "infinity-edge" (old links) and the other way round. Champions and traits
+ * never had such addresses: /units/lux-2 is not a page.
+ */
+function lookup<T extends { key: string; slug?: string }>(list: T[], counters = false) {
   const map = new Map<string, T>();
   const loose = new Map<string, T>();
   for (const e of list) map.set(e.key, e);
@@ -29,7 +34,10 @@ function lookup<T extends { key: string; slug?: string }>(list: T[]) {
   return (q: string | null | undefined) => {
     if (!q) return undefined;
     const lower = q.toLowerCase();
-    return map.get(lower) ?? loose.get(compact(lower));
+    const hit = map.get(lower) ?? loose.get(compact(lower));
+    if (hit || !counters) return hit;
+    const counted = /^(.+)-\d+$/.exec(lower);
+    return counted ? map.get(counted[1]) : map.get(`${lower}-2`);
   };
 }
 
@@ -42,7 +50,7 @@ export function indexStatic<D extends StaticLite>(data: D): StaticIndex<D> {
   const hit = memo.get(data);
   if (hit) return hit as unknown as StaticIndex<D>;
   const byTraitName = new Map(data.traits.map((t) => [t.name.toLowerCase(), t]));
-  const items = lookup(data.items);
+  const items = lookup(data.items, true);
   const emblems = new Map<string, D['items'][number]>();
   for (const i of data.items) if (i.category === 'emblem') emblems.set(emblemToken(i.key), i);
   const item = (q: string | null | undefined) => {

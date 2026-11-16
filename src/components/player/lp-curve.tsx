@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { APEX_SCORE, fromScore, isApex, ladderScore, rankLabel, tierColor } from '@/lib/rank';
+import { APEX_SCORE, ladderScore, rankLabel, tierColor } from '@/lib/rank';
 import type { LpPoint } from '@/lib/store/types';
 import { cn } from '@/lib/utils';
 
@@ -18,44 +18,23 @@ function scoreLabel(s: number) {
 
 const rankText = (p: LpPoint) => `${rankLabel(p.tier, p.division)} · ${p.lp} LP`;
 
-/** Typical LP for each place (1st to 8th): real gains and losses swing with hidden rating, so estimates are rough. */
-const DELTA = [45, 35, 25, 15, -15, -25, -35, -45];
-const ESTIMATE = 20;
-
-type Pt = LpPoint & { s: number; est?: boolean; place?: number };
+type Pt = LpPoint & { s: number };
 
 /**
- * Tracked ranks, preceded by an estimate over the last ESTIMATE ranked games before tracking: walking back from the first
- * tracked rank through each game's placement (games: [minutes since 1970, place]).
+ * The ranks MetaForge has seen, and nothing else: Riot gives no LP history, so the curve starts at the first rank seen.
+ * (It used to walk back through earlier games with a fixed LP per place; Peak and Change then showed LP nobody had.)
  */
-function buildSeries(points: LpPoint[], games: Array<[number, number]>): Pt[] {
-  const real = points.flatMap((p) => {
+function buildSeries(points: LpPoint[]): Pt[] {
+  return points.flatMap((p) => {
     const s = ladderScore(p.tier, p.division, p.lp);
     return s === null ? [] : [{ ...p, s }];
   });
-  const anchor = real[0];
-  if (!anchor) return real;
-  const before = [...new Map(games.map(([m, place]) => [m * 60_000, place])).entries()]
-    .filter(([at]) => at < anchor.at - 60_000)
-    .sort((a, b) => b[0] - a[0])
-    .slice(0, ESTIMATE);
-  if (!before.length) return real;
-  const apex = isApex(anchor.tier) ? anchor.tier : 'MASTER';
-  const est: Pt[] = [];
-  let s = anchor.s;
-  for (const [at, place] of before) {
-    est.push({ at, s, est: true, place, ...fromScore(s, apex) });
-    s = Math.max(0, s - DELTA[place - 1]);
-  }
-  est.push({ at: before.at(-1)![0] - 600_000, s, est: true, ...fromScore(s, apex) });
-  return [...est.reverse(), ...real];
 }
 const day = (t: number) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
 /** The player's LP over the current set, from the ranks MetaForge has seen (profile views and collection runs). */
-export function LpCurve({ points, games, setNumber }: { points: LpPoint[]; games: Array<[number, number]>; setNumber: number }) {
-  const series = useMemo(() => buildSeries(points, games), [points, games]);
-  const estimated = series.filter((p) => p.est).length;
+export function LpCurve({ points, setNumber }: { points: LpPoint[]; setNumber: number }) {
+  const series = useMemo(() => buildSeries(points), [points]);
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [hover, setHover] = useState<number | null>(null);
@@ -96,12 +75,9 @@ export function LpCurve({ points, games, setNumber }: { points: LpPoint[]; games
     const xy = series.map((p) => [x(p.at), y(p.s)] as const);
     const path = (pts: ReadonlyArray<readonly [number, number]>) => pts.map(([a, b], i) => `${i ? 'L' : 'M'}${a.toFixed(1)},${b.toFixed(1)}`).join('');
     const line = path(xy);
-    // The estimate runs up to the first tracked point; the tracked line starts there.
-    const estLine = estimated ? path(xy.slice(0, estimated + 1)) : '';
-    const realLine = path(xy.slice(estimated));
     const end = xy.at(-1)!;
-    return { x, y, grid, ticks, xy, line, estLine, realLine, end, right: PAD.left + w, bottom: PAD.top + h, w, h };
-  }, [size, series, estimated]);
+    return { x, y, grid, ticks, xy, line, end, right: PAD.left + w, bottom: PAD.top + h, w, h };
+  }, [size, series]);
 
   const pick = (clientX: number) => {
     if (!chart || !box.current) return;
@@ -146,6 +122,12 @@ export function LpCurve({ points, games, setNumber }: { points: LpPoint[]; games
         )}
       </div>
 
+      {series.length === 1 && (
+        <p className="mt-3 text-xs leading-relaxed text-fog">
+          First rank seen on {date(first!.at)}. Riot gives no LP history, so the line starts here and grows each time this rank changes.
+        </p>
+      )}
+
       <div
         ref={box}
         role="img"
@@ -182,12 +164,11 @@ export function LpCurve({ points, games, setNumber }: { points: LpPoint[]; games
               </text>
             ))}
             {series.length > 1 && <path d={`${chart.line}L${chart.end[0]},${chart.bottom}L${chart.xy[0][0]},${chart.bottom}Z`} fill="url(#lp-fill)" />}
-            {chart.estLine && <path d={chart.estLine} fill="none" stroke="var(--color-wisp)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
-            {series.length - estimated > 1 && <path d={chart.realLine} fill="none" stroke="var(--color-wisp)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
+            {series.length > 1 && <path d={chart.line} fill="none" stroke="var(--color-wisp)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
             {/* The last rank seen holds until now. */}
             <line x1={chart.end[0]} x2={chart.right} y1={chart.end[1]} y2={chart.end[1]} stroke="var(--color-wisp)" strokeWidth={2} strokeDasharray="3 4" opacity={0.6} />
-            {(series.length - estimated <= 40 ? chart.xy.slice(estimated) : [chart.end]).map(([cx, cy], i) => (
-              <circle key={i} cx={cx} cy={cy} r={series.length - estimated <= 40 ? 3.5 : 4.5} fill="var(--color-wisp)" stroke="var(--color-canopy)" strokeWidth={2} />
+            {(series.length <= 40 ? chart.xy : [chart.end]).map(([cx, cy], i) => (
+              <circle key={i} cx={cx} cy={cy} r={series.length <= 40 ? 3.5 : 4.5} fill="var(--color-wisp)" stroke="var(--color-canopy)" strokeWidth={2} />
             ))}
             {tip && (
               <g>
@@ -219,7 +200,7 @@ export function LpCurve({ points, games, setNumber }: { points: LpPoint[]; games
         )}
       </div>
       <table className="sr-only">
-        <caption>LP history</caption>
+        <caption>{series.length > 50 ? `LP history: the last 50 of ${series.length} ranks seen` : 'LP history'}</caption>
         <tbody>
           {series.slice(-50).map((p) => (
             <tr key={p.at}>

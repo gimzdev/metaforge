@@ -175,7 +175,7 @@ export async function CollectionPage({
         {has && data && <ScopeBar scope={data.scope} meta={data.meta} />}
       </PageHeader>
       {has && data && tab !== 'augments' && (
-        <Panel title="Performance" aside={<span className="text-xs">{data.scope.patch === 'all' ? 'Whole set' : `Patch ${data.scope.patch}`}</span>} flush>
+        <Panel title="Performance" aside={<span className="text-xs">{data.scope.patch === 'all' ? 'All patches' : `Patch ${data.scope.patch}`}</span>} flush>
           {tab === 'champions' && <EntityTable kind="unit" rows={data.units} minN={data.minN} limit={20} />}
           {tab === 'items' && <EntityTable kind="item" rows={data.items} minN={itemMin} limit={20} />}
           {tab === 'traits' && <EntityTable kind="trait" rows={data.traits} minN={data.minN} limit={20} />}
